@@ -1,9 +1,9 @@
-# backend/requirements.txt
+# backend/requirements.txt - FIXED VERSION
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
 pdfplumber==0.10.3
-pdfminer.six==20231228
+# Removed pdfminer.six - let pdfplumber handle its own dependency
 pdf2image==1.16.3
 pytesseract==0.3.10
 pandas==2.1.4
