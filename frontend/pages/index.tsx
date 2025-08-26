@@ -1,9 +1,9 @@
 // frontend/pages/index.tsx
 import { useState } from 'react'
 import Head from 'next/head'
-import FileUpload from '../components/FileUpload'
+import FileUpload from '../components/dsdd'
 import ProgressBar from '../components/ProgressBar.tsx'
-import DownloadLink from '../components/sdddd'
+import DownloadLink from '../components/DownloadLink'
 
 interface ConversionResult {
   session_id: string
