@@ -2,7 +2,7 @@
 import { useState } from 'react'
 import Head from 'next/head'
 import FileUpload from '../components/FileUpload'
-import ProgressBar from '../components/dddd'
+import ProgressBar from '../components/ProgressBar'
 import DownloadLink from '../components/DownloadLink'
 
 interface ConversionResult {
