@@ -45,7 +45,7 @@ export default function DownloadLink({ url, filename, type }: DownloadLinkProps)
     }
   }
 
-  const getFileIcon = (type: string) => {
+  const getFileIcon = () => {
     if (type === 'excel') {
       return (
         <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24">
@@ -61,19 +61,19 @@ export default function DownloadLink({ url, filename, type }: DownloadLinkProps)
     )
   }
 
-  const getButtonStyle = (type: string) => {
+  const getButtonStyle = () => {
     if (type === 'excel') {
       return 'bg-green-600 hover:bg-green-700 text-white'
     }
     return 'bg-blue-600 hover:bg-blue-700 text-white'
   }
 
-  const getTypeLabel = (type: string) => {
+  const getTypeLabel = () => {
     if (type === 'excel') return 'Excel'
     return 'CSV'
   }
 
-  const getTypeDescription = (type: string) => {
+  const getTypeDescription = () => {
     if (type === 'excel') {
       return 'Formatted spreadsheet with styling'
     }
@@ -87,15 +87,15 @@ export default function DownloadLink({ url, filename, type }: DownloadLinkProps)
           <div className={`w-12 h-12 rounded-lg flex items-center justify-center ${
             type === 'excel' ? 'bg-green-100 text-green-600' : 'bg-blue-100 text-blue-600'
           }`}>
-            {getFileIcon(type)}
+            {getFileIcon()}
           </div>
           
           <div className="flex-1">
             <h3 className="font-semibold text-gray-900">
-              Download {getTypeLabel(type)}
+              Download {getTypeLabel()}
             </h3>
             <p className="text-sm text-gray-500">
-              {getTypeDescription(type)}
+              {getTypeDescription()}
             </p>
             <p className="text-xs text-gray-400 mt-1">
               {filename}
@@ -110,7 +110,7 @@ export default function DownloadLink({ url, filename, type }: DownloadLinkProps)
             px-6 py-3 rounded-lg font-medium transition-all duration-200
             focus:outline-none focus:ring-2 focus:ring-offset-2
             disabled:opacity-50 disabled:cursor-not-allowed
-            ${getButtonStyle(type)}
+            ${getButtonStyle()}
             ${type === 'excel' ? 'focus:ring-green-500' : 'focus:ring-blue-500'}
           `}
         >
