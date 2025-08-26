@@ -1,0 +1,12 @@
+# backend/requirements.txt
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+python-multipart==0.0.6
+pdfplumber==0.10.3
+pdfminer.six==20231228
+pdf2image==1.16.3
+pytesseract==0.3.10
+pandas==2.1.4
+openpyxl==3.1.2
+Pillow==10.1.0
+psutil==5.9.6
