@@ -2,8 +2,8 @@
 import { useState } from 'react'
 import Head from 'next/head'
 import FileUpload from '../components/FileUpload'
-import ProgressBar from '../components/ProgressBar'
-import DownloadLink from '../components/DownloadLink'
+import ProgressBar from '../components/ProgressBar.tsx'
+import DownloadLink from '../components/sdddd'
 
 interface ConversionResult {
   session_id: string
