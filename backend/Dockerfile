@@ -1,4 +1,4 @@
-# backend/Dockerfile
+# backend/Dockerfile - FIXED VERSION
 FROM python:3.11-slim
 
 # Install system dependencies for PDF processing and OCR
@@ -6,13 +6,13 @@ RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-eng \
     poppler-utils \
-    libgl1-mesa-glx \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
-    libxrender-dev \
+    libxrender1 \
     libgomp1 \
     libgcc-s1 \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
@@ -34,7 +34,7 @@ RUN mkdir -p temp_files
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
 
-# Expose port
+# Expose port (Railway will override this)
 EXPOSE 8000
 
 # Health check
