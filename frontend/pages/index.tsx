@@ -1,63 +1,149 @@
-// frontend/pages/index.tsx
-import { useState } from 'react'
+// frontend/pages/index.tsx - ENHANCED WITH DEBUGGING
+import { useState, useEffect } from 'react'
 import Head from 'next/head'
 import FileUpload from '../components/FileUpload'
 import ProgressBar from '../components/ProgressBar'
 import DownloadLink from '../components/DownloadLink'
+import DebugPanel from '../components/DebugPanel'
 
 interface ConversionResult {
   session_id: string
   transactions_count: number
   excel_url: string
   csv_url: string
+  processing_time?: number
+  success: boolean
+  debug_logs?: DebugLog[]
+  raw_content_preview?: string
+  extraction_details?: any
+  parsing_details?: any
+  sample_transactions?: any[]
+}
+
+interface DebugLog {
+  timestamp: string
+  level: string
+  message: string
+  data?: any
+}
+
+interface ErrorResponse {
+  error: boolean
+  message: string
+  session_id?: string
+  debug_logs?: DebugLog[]
+  raw_content?: string
+  traceback?: string
 }
 
 export default function Home() {
   const [isProcessing, setIsProcessing] = useState(false)
   const [progress, setProgress] = useState(0)
+  const [progressMessage, setProgressMessage] = useState('')
   const [result, setResult] = useState<ConversionResult | null>(null)
   const [error, setError] = useState<string | null>(null)
+  const [errorDetails, setErrorDetails] = useState<ErrorResponse | null>(null)
+  const [debugMode, setDebugMode] = useState(true)
+  const [showDebugPanel, setShowDebugPanel] = useState(false)
+  const [debugLogs, setDebugLogs] = useState<DebugLog[]>([])
+  const [apiHealth, setApiHealth] = useState<any>(null)
+
+  // Check API health on mount
+  useEffect(() => {
+    checkApiHealth()
+  }, [])
+
+  const checkApiHealth = async () => {
+    try {
+      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
+      const response = await fetch(`${apiUrl}/health`)
+      const data = await response.json()
+      setApiHealth(data)
+      console.log('API Health:', data)
+    } catch (error) {
+      console.error('API Health Check Failed:', error)
+      setApiHealth({ status: 'error', message: error.message })
+    }
+  }
 
   const handleFileUpload = async (file: File) => {
+    console.log('Starting file upload:', file.name, 'Size:', file.size)
+    
     setIsProcessing(true)
     setProgress(0)
+    setProgressMessage('Initializing...')
     setResult(null)
     setError(null)
+    setErrorDetails(null)
+    setDebugLogs([])
 
     try {
-      // Simulate progress updates
-      const progressInterval = setInterval(() => {
-        setProgress(prev => Math.min(prev + 10, 90))
-      }, 500)
-
       const formData = new FormData()
       formData.append('file', file)
 
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-      const response = await fetch(`${apiUrl}/convert`, {
+      
+      // Add debug parameter
+      const uploadUrl = `${apiUrl}/convert?debug=${debugMode}`
+      
+      console.log('Uploading to:', uploadUrl)
+      setProgress(10)
+      setProgressMessage('Uploading file...')
+
+      const response = await fetch(uploadUrl, {
         method: 'POST',
         body: formData,
       })
 
-      clearInterval(progressInterval)
+      console.log('Response status:', response.status)
+      const data = await response.json()
+      console.log('Response data:', data)
 
-      if (!response.ok) {
-        const errorData = await response.json()
-        throw new Error(errorData.detail || 'Conversion failed')
+      if (!response.ok || data.error) {
+        // Handle error response
+        const errorData = data as ErrorResponse
+        
+        setError(errorData.message || 'Conversion failed')
+        setErrorDetails(errorData)
+        
+        // Store debug logs if available
+        if (errorData.debug_logs) {
+          setDebugLogs(errorData.debug_logs)
+        }
+        
+        // Show debug panel on error
+        if (debugMode) {
+          setShowDebugPanel(true)
+        }
+        
+        console.error('Conversion failed:', errorData)
+        return
       }
 
-      const data = await response.json()
+      // Success
+      const resultData = data as ConversionResult
+      
       setProgress(100)
-      setResult(data)
+      setProgressMessage('Conversion complete!')
+      setResult(resultData)
+      
+      // Store debug logs
+      if (resultData.debug_logs) {
+        setDebugLogs(resultData.debug_logs)
+      }
+      
+      console.log('Conversion successful:', resultData)
 
       // Auto-cleanup after 30 minutes
       setTimeout(() => {
-        fetch(`${apiUrl}/cleanup/${data.session_id}`, { method: 'DELETE' })
+        fetch(`${apiUrl}/cleanup/${resultData.session_id}`, { method: 'DELETE' })
       }, 30 * 60 * 1000)
 
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'An error occurred')
+      const errorMsg = err instanceof Error ? err.message : 'An error occurred'
+      setError(`Network error: ${errorMsg}`)
       setProgress(0)
+      console.error('Network error:', err)
     } finally {
       setIsProcessing(false)
     }
@@ -66,13 +152,54 @@ export default function Home() {
   const resetForm = () => {
     setResult(null)
     setError(null)
+    setErrorDetails(null)
     setProgress(0)
+    setProgressMessage('')
+    setDebugLogs([])
+    setShowDebugPanel(false)
   }
+
+  // Update progress based on debug logs
+  useEffect(() => {
+    if (debugLogs.length > 0 && isProcessing) {
+      const lastLog = debugLogs[debugLogs.length - 1]
+      
+      // Update progress based on log messages
+      if (lastLog.message.includes('Saving uploaded file')) {
+        setProgress(20)
+        setProgressMessage('Saving file...')
+      } else if (lastLog.message.includes('Starting PDF content extraction')) {
+        setProgress(30)
+        setProgressMessage('Extracting content from PDF...')
+      } else if (lastLog.message.includes('Attempting text extraction')) {
+        setProgress(40)
+        setProgressMessage('Reading PDF text...')
+      } else if (lastLog.message.includes('trying OCR')) {
+        setProgress(50)
+        setProgressMessage('Using OCR to read scanned document...')
+      } else if (lastLog.message.includes('Starting transaction parsing')) {
+        setProgress(60)
+        setProgressMessage('Parsing transactions...')
+      } else if (lastLog.message.includes('Trying standard UK format')) {
+        setProgress(65)
+        setProgressMessage('Analyzing UK bank format...')
+      } else if (lastLog.message.includes('Trying tabular format')) {
+        setProgress(70)
+        setProgressMessage('Analyzing table structure...')
+      } else if (lastLog.message.includes('Starting export')) {
+        setProgress(85)
+        setProgressMessage('Generating Excel and CSV files...')
+      } else if (lastLog.message.includes('Conversion completed successfully')) {
+        setProgress(100)
+        setProgressMessage('Complete!')
+      }
+    }
+  }, [debugLogs, isProcessing])
 
   return (
     <>
       <Head>
-        <title>Bank Statement Converter</title>
+        <title>Bank Statement Converter - Debug Mode</title>
         <meta name="description" content="Convert bank statement PDFs to Excel and CSV format" />
         <meta name="viewport" content="width=device-width, initial-scale=1" />
         <link rel="icon" href="/favicon.ico" />
@@ -80,16 +207,69 @@ export default function Home() {
 
       <main className="min-h-screen bg-gradient-to-br from-blue-50 to-indigo-100">
         <div className="container mx-auto px-4 py-8">
-          {/* Header */}
-          <div className="text-center mb-12">
+          {/* Header with Debug Toggle */}
+          <div className="text-center mb-8">
             <h1 className="text-4xl md:text-5xl font-bold text-gray-900 mb-4">
               Bank Statement Converter
             </h1>
-            <p className="text-lg text-gray-600 max-w-2xl mx-auto">
-              Convert your UK bank statement PDFs into structured Excel and CSV files. 
-              Works with both digital and scanned documents.
+            <p className="text-lg text-gray-600 max-w-2xl mx-auto mb-4">
+              Convert your UK bank statement PDFs into structured Excel and CSV files.
             </p>
+            
+            {/* Debug Controls */}
+            <div className="flex justify-center items-center gap-4 mt-4">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={debugMode}
+                  onChange={(e) => setDebugMode(e.target.checked)}
+                  className="w-4 h-4 text-blue-600 rounded focus:ring-blue-500"
+                />
+                <span className="text-sm font-medium text-gray-700">Debug Mode</span>
+              </label>
+              
+              {debugLogs.length > 0 && (
+                <button
+                  onClick={() => setShowDebugPanel(!showDebugPanel)}
+                  className="px-4 py-2 text-sm bg-gray-600 text-white rounded-lg hover:bg-gray-700 transition-colors"
+                >
+                  {showDebugPanel ? 'Hide' : 'Show'} Debug Panel ({debugLogs.length} logs)
+                </button>
+              )}
+              
+              <button
+                onClick={checkApiHealth}
+                className="px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+              >
+                Check API Health
+              </button>
+            </div>
+            
+            {/* API Health Status */}
+            {apiHealth && (
+              <div className={`mt-4 p-2 rounded-lg text-sm ${
+                apiHealth.status === 'healthy' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+              }`}>
+                API Status: {apiHealth.status}
+                {apiHealth.system && (
+                  <span className="ml-2">
+                    | Tesseract: {apiHealth.system.tesseract}
+                    | Memory: {apiHealth.system.memory_percent}%
+                  </span>
+                )}
+              </div>
+            )}
           </div>
+
+          {/* Debug Panel */}
+          {showDebugPanel && (debugLogs.length > 0 || errorDetails) && (
+            <DebugPanel
+              logs={debugLogs}
+              errorDetails={errorDetails}
+              result={result}
+              onClose={() => setShowDebugPanel(false)}
+            />
+          )}
 
           {/* Main Content */}
           <div className="max-w-4xl mx-auto">
@@ -111,39 +291,6 @@ export default function Home() {
                   </div>
 
                   <FileUpload onFileUpload={handleFileUpload} />
-
-                  {/* Features */}
-                  <div className="grid md:grid-cols-3 gap-6 mt-12">
-                    <div className="text-center">
-                      <div className="w-12 h-12 bg-green-100 rounded-lg flex items-center justify-center mx-auto mb-3">
-                        <svg className="w-6 h-6 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12l2 2 4-4m6 2a9 9 0 11-18 0 9 9 0 0118 0z" />
-                        </svg>
-                      </div>
-                      <h3 className="font-semibold text-gray-900 mb-1">Smart Recognition</h3>
-                      <p className="text-sm text-gray-600">Handles both digital and scanned PDFs with OCR fallback</p>
-                    </div>
-
-                    <div className="text-center">
-                      <div className="w-12 h-12 bg-blue-100 rounded-lg flex items-center justify-center mx-auto mb-3">
-                        <svg className="w-6 h-6 text-blue-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                        </svg>
-                      </div>
-                      <h3 className="font-semibold text-gray-900 mb-1">Multiple Formats</h3>
-                      <p className="text-sm text-gray-600">Download as Excel (.xlsx) or CSV for easy analysis</p>
-                    </div>
-
-                    <div className="text-center">
-                      <div className="w-12 h-12 bg-purple-100 rounded-lg flex items-center justify-center mx-auto mb-3">
-                        <svg className="w-6 h-6 text-purple-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-                        </svg>
-                      </div>
-                      <h3 className="font-semibold text-gray-900 mb-1">Secure Processing</h3>
-                      <p className="text-sm text-gray-600">Files are processed securely and automatically deleted</p>
-                    </div>
-                  </div>
                 </div>
               )}
 
@@ -159,15 +306,23 @@ export default function Home() {
                     <h2 className="text-2xl font-semibold text-gray-900 mb-2">
                       Processing Your Statement
                     </h2>
-                    <p className="text-gray-600 mb-6">
-                      Extracting and parsing your transaction data...
+                    <p className="text-gray-600 mb-2">
+                      {progressMessage || 'Extracting and parsing your transaction data...'}
                     </p>
+                    
+                    {/* Show current processing step from logs */}
+                    {debugMode && debugLogs.length > 0 && (
+                      <div className="text-xs text-gray-500 mt-2 p-2 bg-gray-50 rounded">
+                        Last action: {debugLogs[debugLogs.length - 1].message}
+                      </div>
+                    )}
+                    
                     <ProgressBar progress={progress} />
                   </div>
                 </div>
               )}
 
-              {result && (
+              {result && result.success && (
                 <div className="text-center space-y-6">
                   <div className="w-16 h-16 bg-green-100 rounded-full flex items-center justify-center mx-auto">
                     <svg className="w-8 h-8 text-green-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -179,11 +334,16 @@ export default function Home() {
                     <h2 className="text-2xl font-semibold text-gray-900 mb-2">
                       Conversion Complete!
                     </h2>
-                    <p className="text-gray-600 mb-6">
+                    <p className="text-gray-600 mb-2">
                       Successfully processed {result.transactions_count} transactions
                     </p>
+                    {result.processing_time && (
+                      <p className="text-sm text-gray-500">
+                        Processing time: {result.processing_time}s
+                      </p>
+                    )}
                     
-                    <div className="space-y-4">
+                    <div className="space-y-4 mt-6">
                       <DownloadLink
                         url={result.excel_url}
                         filename="bank_transactions.xlsx"
@@ -222,6 +382,19 @@ export default function Home() {
                       {error}
                     </p>
                     
+                    {errorDetails && debugMode && (
+                      <div className="text-left bg-red-50 p-4 rounded-lg mb-4">
+                        <p className="text-sm font-medium text-red-900 mb-2">Error Details:</p>
+                        <pre className="text-xs text-red-700 overflow-x-auto">
+                          {JSON.stringify({
+                            session_id: errorDetails.session_id,
+                            has_raw_content: !!errorDetails.raw_content,
+                            logs_count: errorDetails.debug_logs?.length || 0
+                          }, null, 2)}
+                        </pre>
+                      </div>
+                    )}
+                    
                     <button
                       onClick={resetForm}
                       className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
@@ -232,12 +405,6 @@ export default function Home() {
                 </div>
               )}
             </div>
-          </div>
-
-          {/* Footer */}
-          <div className="text-center mt-12 text-gray-500 text-sm">
-            <p>Supports major UK banks including Barclays, HSBC, NatWest, and more</p>
-            <p className="mt-2">Files are automatically deleted after processing for your security</p>
           </div>
         </div>
       </main>
