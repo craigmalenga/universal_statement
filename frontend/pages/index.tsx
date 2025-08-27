@@ -59,7 +59,7 @@ export default function Home() {
   const checkApiHealth = async () => {
     try {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-      const response = await fetch(`${apiUrl}/health`)
+      const response = await fetch('/api/health')
       const data = await response.json()
       setApiHealth(data)
       console.log('API Health:', data)
@@ -90,7 +90,7 @@ export default function Home() {
       const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
       
       // Add debug parameter
-      const uploadUrl = `${apiUrl}/convert?debug=${debugMode}`
+      const uploadUrl = `/api/convert?debug=${debugMode}`
       
       console.log('Uploading to:', uploadUrl)
       setProgress(10)
@@ -142,7 +142,7 @@ export default function Home() {
 
       // Auto-cleanup after 30 minutes
       setTimeout(() => {
-        fetch(`${apiUrl}/cleanup/${resultData.session_id}`, { method: 'DELETE' })
+        fetch(`/api/cleanup/${resultData.session_id}`, { method: 'DELETE' })
       }, 30 * 60 * 1000)
 
     } catch (err) {

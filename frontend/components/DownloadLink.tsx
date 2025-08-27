@@ -14,9 +14,7 @@ export default function DownloadLink({ url, filename, type }: DownloadLinkProps)
     setIsDownloading(true)
     
     try {
-      const apiUrl = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000'
-      const downloadUrl = `${apiUrl}${url}`
-      
+      const downloadUrl = `/api${url}`
       const response = await fetch(downloadUrl)
       
       if (!response.ok) {
