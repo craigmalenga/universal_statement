@@ -1,4 +1,4 @@
-# backend/app/parsing.py
+# backend/app/parsing.py - UNIVERSAL UK BANK PARSER
 import pandas as pd
 import re
 from datetime import datetime
@@ -9,447 +9,519 @@ logger = logging.getLogger(__name__)
 
 def parse_transactions(raw_content: str) -> pd.DataFrame:
     """
-    Parse raw text content into structured transaction data
+    Universal bank statement parser for UK banks
     """
     try:
-        # Clean and preprocess the content
+        # Clean content first
         content = preprocess_content(raw_content)
         
-        # Try different parsing strategies
-        transactions = []
+        # Extract all potential transaction lines
+        all_transactions = []
         
-        # Strategy 1: Standard UK bank format
-        transactions = parse_standard_uk_format(content)
+        # Strategy 1: Extract ALL lines with dates and amounts
+        logger.info("Attempting comprehensive extraction...")
+        all_transactions = extract_all_transaction_lines(content)
         
-        # Strategy 2: Tabular format (if strategy 1 failed)
-        if not transactions:
-            transactions = parse_tabular_format(content)
+        if len(all_transactions) < 5:  # Too few, try alternative methods
+            logger.info(f"Only found {len(all_transactions)} transactions, trying alternative methods...")
+            
+            # Strategy 2: Table extraction with headers
+            table_transactions = extract_table_transactions(content)
+            if len(table_transactions) > len(all_transactions):
+                all_transactions = table_transactions
+            
+            # Strategy 3: Block-based extraction (for PDFs that group text oddly)
+            if len(all_transactions) < 5:
+                block_transactions = extract_block_transactions(content)
+                if len(block_transactions) > len(all_transactions):
+                    all_transactions = block_transactions
         
-        # Strategy 3: Line-by-line parsing (fallback)
-        if not transactions:
-            transactions = parse_line_by_line(content)
-        
-        if not transactions:
-            logger.warning("No transactions found in content")
+        if not all_transactions:
+            logger.warning("No transactions found")
             return pd.DataFrame()
         
-        # Convert to DataFrame
-        df = pd.DataFrame(transactions)
-        
-        # Clean and validate data
-        df = clean_transaction_data(df)
-        
-        # Sort by date
-        df = df.sort_values('date').reset_index(drop=True)
+        # Convert to DataFrame and clean
+        df = pd.DataFrame(all_transactions)
+        df = clean_and_validate_transactions(df)
         
         logger.info(f"Successfully parsed {len(df)} transactions")
         return df
         
     except Exception as e:
         logger.error(f"Error parsing transactions: {str(e)}")
+        import traceback
+        logger.error(traceback.format_exc())
         return pd.DataFrame()
 
 def preprocess_content(content: str) -> str:
     """
-    Clean and preprocess content for parsing
+    Clean and normalize content for parsing
     """
     if not content:
         return ""
     
-    # Remove extra whitespace and normalize line breaks
-    content = re.sub(r'\r\n|\r', '\n', content)
-    content = re.sub(r'\n\s*\n', '\n', content)
+    # Fix common OCR issues
+    replacements = {
+        r'[Il|](\d)': r'1\1',  # I/l/| followed by digit -> 1
+        r'(\d)[Il|]': r'\11',  # digit followed by I/l/| -> 1
+        r'[Oo](\d)': r'0\1',  # O followed by digit -> 0
+        r'(\d)[Oo]': r'\10',  # digit followed by O -> 0
+        r'£\s+': '£',  # Remove spaces after £
+        r'(\d)\s+\.\s*(\d)': r'\1.\2',  # Fix decimal spacing
+        r'(\d),\s*(\d{3})': r'\1,\2',  # Fix thousand separator
+    }
     
-    # Fix common formatting issues
-    content = re.sub(r'\s+', ' ', content)
-    content = re.sub(r'(\d)\s+(\.\d{2})', r'\1\2', content)  # Fix decimal spacing
-    content = re.sub(r'£\s+(\d)', r'£\1', content)  # Fix currency spacing
+    for pattern, replacement in replacements.items():
+        content = re.sub(pattern, replacement, content)
     
-    return content.strip()
+    return content
 
-def parse_standard_uk_format(content: str) -> List[Dict[str, Any]]:
+def extract_all_transaction_lines(content: str) -> List[Dict[str, Any]]:
     """
-    Parse standard UK bank statement format
+    Extract ALL lines that look like transactions (date + amounts)
     """
     transactions = []
     lines = content.split('\n')
     
-    # Common UK date patterns
-    date_patterns = [
-        r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})',  # DD/MM/YYYY or DD-MM-YYYY
-        r'(\d{1,2}\s+\w{3}\s+\d{2,4})',      # DD MMM YYYY
-        r'(\d{2}\w{3}\d{2,4})',              # DDMMMYYYY
-    ]
+    # Track which lines we've already processed
+    processed_indices = set()
     
-    # Amount patterns
-    amount_patterns = [
-        r'£(\d+(?:,\d{3})*\.\d{2})',         # £1,234.56
-        r'£(\d+\.\d{2})',                    # £123.45
-        r'(\d+(?:,\d{3})*\.\d{2})',         # 1,234.56
-        r'(\d+\.\d{2})',                     # 123.45
-    ]
-    
-    for line in lines:
+    for i, line in enumerate(lines):
+        if i in processed_indices:
+            continue
+            
         line = line.strip()
         if not line or len(line) < 10:
             continue
         
-        # Try to find a date
-        date_match = None
-        for pattern in date_patterns:
-            date_match = re.search(pattern, line)
+        # Look for UK date formats
+        date_patterns = [
+            (r'(\d{2}/\d{2}/\d{4})', '%d/%m/%Y'),  # 31/07/2025
+            (r'(\d{2}-\d{2}-\d{4})', '%d-%m-%Y'),  # 31-07-2025
+            (r'(\d{2}/\d{2}/\d{2})', '%d/%m/%y'),  # 31/07/25
+            (r'(\d{2}\s+\w{3}\s+\d{4})', '%d %b %Y'),  # 31 Jul 2025
+            (r'(\d{2}\w{3}\d{2})', '%d%b%y'),  # 31Jul25
+        ]
+        
+        transaction = None
+        for date_pattern, date_format in date_patterns:
+            date_match = re.search(date_pattern, line)
             if date_match:
-                break
+                date_str = date_match.group(1)
+                parsed_date = parse_date_flexible(date_str, date_format)
+                
+                if parsed_date:
+                    # Found a date, now extract the transaction
+                    transaction = extract_transaction_from_line(
+                        line, date_str, parsed_date, date_match.span()
+                    )
+                    if transaction:
+                        transactions.append(transaction)
+                        processed_indices.add(i)
+                        break
         
-        if not date_match:
-            continue
-        
-        # Extract date
-        date_str = date_match.group(1)
-        parsed_date = parse_date(date_str)
-        
-        if not parsed_date:
-            continue
-        
-        # Find amounts in the line
-        amounts = []
-        for pattern in amount_patterns:
-            for match in re.finditer(pattern, line):
-                amount_str = match.group(1) if match.groups() else match.group(0)
-                amount_str = amount_str.replace('£', '').replace(',', '')
-                try:
-                    amount = float(amount_str)
-                    amounts.append((amount, match.start(), match.end()))
-                except ValueError:
-                    continue
-        
-        if not amounts:
-            continue
-        
-        # Extract description (text between date and amounts)
-        date_end = date_match.end()
-        first_amount_start = min(pos[1] for pos in amounts)
-        
-        description = line[date_end:first_amount_start].strip()
-        description = re.sub(r'\s+', ' ', description)
-        
-        # Determine debit/credit and balance
-        debit, credit, balance = categorize_amounts(amounts, line)
-        
-        transaction = {
-            'date': parsed_date,
-            'description': description,
-            'debit': debit,
-            'credit': credit,
-            'balance': balance
-        }
-        
-        transactions.append(transaction)
+        # If no transaction found on this line, check if it might be multi-line
+        if not transaction and i < len(lines) - 1:
+            # Check if next line has amounts but no date (continuation)
+            next_line = lines[i + 1].strip()
+            if re.search(r'-?\d+\.\d{2}', next_line) and not re.search(r'\d{2}[/-]\d{2}', next_line):
+                # Combine lines and retry
+                combined = line + ' ' + next_line
+                for date_pattern, date_format in date_patterns:
+                    date_match = re.search(date_pattern, combined)
+                    if date_match:
+                        date_str = date_match.group(1)
+                        parsed_date = parse_date_flexible(date_str, date_format)
+                        if parsed_date:
+                            transaction = extract_transaction_from_line(
+                                combined, date_str, parsed_date, date_match.span()
+                            )
+                            if transaction:
+                                transactions.append(transaction)
+                                processed_indices.add(i)
+                                processed_indices.add(i + 1)
+                                break
     
     return transactions
 
-def parse_tabular_format(content: str) -> List[Dict[str, Any]]:
+def extract_transaction_from_line(line: str, date_str: str, parsed_date: str, 
+                                 date_span: Tuple[int, int]) -> Optional[Dict[str, Any]]:
     """
-    Parse tabular format with clear column separation
+    Extract transaction details from a line that contains a date
+    """
+    # Find all monetary amounts in the line
+    amount_pattern = r'-?£?\d+(?:,\d{3})*\.?\d{0,2}'
+    amounts = []
+    
+    for match in re.finditer(amount_pattern, line):
+        amount_str = match.group()
+        # Clean and convert
+        amount_str = amount_str.replace('£', '').replace(',', '')
+        
+        # Skip if it's part of the date
+        if match.start() >= date_span[0] and match.end() <= date_span[1]:
+            continue
+        
+        try:
+            # Only include if it looks like money (has decimal or is large enough)
+            amount = float(amount_str)
+            if '.' in match.group() or amount > 10:  # Either has decimal or > £10
+                amounts.append({
+                    'value': amount,
+                    'position': match.start(),
+                    'original': match.group()
+                })
+        except ValueError:
+            continue
+    
+    if not amounts:
+        return None
+    
+    # Extract description (text between date and first amount, or after date)
+    desc_start = date_span[1]
+    desc_end = amounts[0]['position'] if amounts else len(line)
+    description = line[desc_start:desc_end].strip()
+    
+    # Clean description
+    description = re.sub(r'^\W+|\W+$', '', description)  # Remove leading/trailing non-word chars
+    description = re.sub(r'\s+', ' ', description)  # Normalize whitespace
+    
+    # If description is too short, try to find more text
+    if len(description) < 3 and amounts:
+        # Look for text after the first amount
+        if len(amounts) > 1:
+            alt_desc = line[amounts[0]['position'] + len(amounts[0]['original']):amounts[1]['position']]
+            if len(alt_desc.strip()) > len(description):
+                description = alt_desc.strip()
+    
+    # Categorize amounts
+    transaction = {
+        'date': parsed_date,
+        'description': description if description else 'Transaction',
+        'debit': None,
+        'credit': None,
+        'balance': None
+    }
+    
+    # Logic for amount assignment
+    if len(amounts) == 1:
+        # Single amount - determine if debit or credit
+        amt = amounts[0]['value']
+        if amt < 0:
+            transaction['debit'] = abs(amt)
+        else:
+            # Check context for debit indicators
+            line_lower = line.lower()
+            if any(indicator in line_lower for indicator in ['payment', 'debit', 'purchase', 'withdrawal']):
+                transaction['debit'] = amt
+            else:
+                transaction['credit'] = amt
+    
+    elif len(amounts) == 2:
+        # Two amounts - likely amount and balance
+        amt = amounts[0]['value']
+        bal = amounts[1]['value']
+        
+        # The larger absolute value is usually the balance
+        if abs(bal) > abs(amt) * 2:  # Balance is typically much larger
+            transaction['balance'] = bal
+            if amt < 0:
+                transaction['debit'] = abs(amt)
+            else:
+                transaction['credit'] = amt
+        else:
+            # Might be debit and credit
+            if amt < 0:
+                transaction['debit'] = abs(amt)
+                transaction['credit'] = bal if bal > 0 else None
+            else:
+                transaction['debit'] = bal if bal < 0 else None
+                transaction['credit'] = amt
+    
+    elif len(amounts) >= 3:
+        # Multiple amounts - likely debit, credit, balance
+        # Assume last is balance, others are debit/credit
+        transaction['balance'] = amounts[-1]['value']
+        
+        # Process other amounts
+        for amt in amounts[:-1]:
+            if amt['value'] < 0:
+                transaction['debit'] = abs(amt['value'])
+            elif amt['value'] > 0 and transaction['credit'] is None:
+                transaction['credit'] = amt['value']
+    
+    return transaction
+
+def extract_table_transactions(content: str) -> List[Dict[str, Any]]:
+    """
+    Extract transactions assuming a table structure with consistent columns
     """
     transactions = []
     lines = content.split('\n')
     
-    # Look for header row
-    header_idx = None
-    columns = []
+    # Find lines that look like headers
+    header_line = None
+    header_idx = -1
     
     for i, line in enumerate(lines):
         line_lower = line.lower()
-        if any(word in line_lower for word in ['date', 'description', 'amount', 'balance']):
+        if ('date' in line_lower or 'transaction' in line_lower) and \
+           ('amount' in line_lower or 'debit' in line_lower or 'credit' in line_lower):
+            header_line = line
             header_idx = i
-            # Extract column positions
-            columns = extract_column_positions(line)
             break
     
-    if header_idx is None or not columns:
-        return []
+    if header_idx == -1:
+        return transactions
     
-    # Parse data rows
+    # Detect column positions from header
+    columns = detect_column_positions(header_line)
+    if not columns:
+        return transactions
+    
+    # Process data lines
     for line in lines[header_idx + 1:]:
         if not line.strip():
             continue
         
         # Extract values based on column positions
-        values = extract_values_by_positions(line, columns)
+        values = extract_by_column_position(line, columns)
         
-        if len(values) < 3:  # Need at least date, description, amount
-            continue
-        
-        # Parse transaction
-        transaction = parse_tabular_row(values)
-        if transaction:
+        # Create transaction if valid
+        transaction = create_transaction_from_columns(values, columns)
+        if transaction and transaction.get('date'):
             transactions.append(transaction)
     
     return transactions
 
-def parse_line_by_line(content: str) -> List[Dict[str, Any]]:
+def extract_block_transactions(content: str) -> List[Dict[str, Any]]:
     """
-    Fallback parsing - try to extract transactions from each line
+    Extract transactions from block-formatted text (common in OCR output)
     """
     transactions = []
-    lines = content.split('\n')
     
-    for line in lines:
-        line = line.strip()
-        if len(line) < 15:  # Too short to be a transaction
+    # Split by double newlines or other block separators
+    blocks = re.split(r'\n\s*\n', content)
+    
+    for block in blocks:
+        block = block.strip()
+        if not block:
             continue
         
-        # Look for date pattern
-        date_match = re.search(r'(\d{1,2}[/-]\d{1,2}[/-]\d{2,4})', line)
-        if not date_match:
+        # Check if block contains transaction-like content
+        if not re.search(r'\d{2}[/-]\d{2}', block):  # No date
             continue
         
-        date_str = date_match.group(1)
-        parsed_date = parse_date(date_str)
+        # Try to parse as single transaction
+        lines = block.split('\n')
         
-        if not parsed_date:
+        # Look for date line
+        date_line = None
+        date_parsed = None
+        
+        for line in lines:
+            date_match = re.search(r'(\d{2}[/-]\d{2}[/-]\d{2,4})', line)
+            if date_match:
+                date_parsed = parse_date_flexible(date_match.group(1), None)
+                date_line = line
+                break
+        
+        if not date_parsed:
             continue
         
-        # Find amounts
-        amounts = re.findall(r'£?(\d+(?:,\d{3})*\.\d{2})', line)
-        if not amounts:
-            continue
+        # Extract amounts from all lines
+        amounts = []
+        description_parts = []
         
-        # Convert amounts to float
-        numeric_amounts = []
-        for amount_str in amounts:
-            try:
-                amount = float(amount_str.replace(',', ''))
-                numeric_amounts.append(amount)
-            except ValueError:
-                continue
+        for line in lines:
+            # Get amounts
+            amt_matches = re.findall(r'-?£?\d+(?:,\d{3})*\.?\d{0,2}', line)
+            for amt_str in amt_matches:
+                clean_amt = amt_str.replace('£', '').replace(',', '')
+                try:
+                    amt = float(clean_amt)
+                    if '.' in amt_str or amt > 10:
+                        amounts.append(amt)
+                except:
+                    pass
+            
+            # Get text that might be description
+            clean_line = re.sub(r'-?£?\d+(?:,\d{3})*\.?\d{0,2}', '', line).strip()
+            clean_line = re.sub(r'\d{2}[/-]\d{2}[/-]\d{2,4}', '', clean_line).strip()
+            if clean_line and len(clean_line) > 2:
+                description_parts.append(clean_line)
         
-        if not numeric_amounts:
-            continue
-        
-        # Extract description (rough approximation)
-        description_match = re.search(r'\d{1,2}[/-]\d{1,2}[/-]\d{2,4}\s+(.+?)\s+£?\d+', line)
-        description = description_match.group(1).strip() if description_match else ""
-        
-        # Simple amount categorization
-        if len(numeric_amounts) == 1:
-            # Assume single amount is debit if negative context, else credit
-            amount = numeric_amounts[0]
-            if any(word in line.lower() for word in ['dr', 'debit', 'withdrawal', 'payment']):
-                debit, credit, balance = amount, None, None
-            else:
-                debit, credit, balance = None, amount, None
-        elif len(numeric_amounts) == 2:
-            # Assume first is transaction, second is balance
-            debit, credit, balance = numeric_amounts[0], None, numeric_amounts[1]
-        else:
-            # Take last as balance, try to categorize others
-            balance = numeric_amounts[-1]
-            transaction_amounts = numeric_amounts[:-1]
-            debit = transaction_amounts[0] if transaction_amounts else None
-            credit = None
-        
-        transaction = {
-            'date': parsed_date,
-            'description': description,
-            'debit': debit,
-            'credit': credit,
-            'balance': balance
-        }
-        
-        transactions.append(transaction)
+        if amounts:
+            transaction = {
+                'date': date_parsed,
+                'description': ' '.join(description_parts) if description_parts else 'Transaction',
+                'debit': None,
+                'credit': None,
+                'balance': None
+            }
+            
+            # Assign amounts
+            if len(amounts) >= 1:
+                if amounts[0] < 0:
+                    transaction['debit'] = abs(amounts[0])
+                else:
+                    transaction['credit'] = amounts[0]
+            
+            if len(amounts) >= 2:
+                transaction['balance'] = amounts[-1]
+            
+            transactions.append(transaction)
     
     return transactions
 
-def parse_date(date_str: str) -> Optional[str]:
+def detect_column_positions(header_line: str) -> Dict[str, Tuple[int, int]]:
     """
-    Parse various date formats to YYYY-MM-DD
+    Detect column positions from a header line
+    """
+    columns = {}
+    header_lower = header_line.lower()
+    
+    # Find column headers and their positions
+    patterns = {
+        'date': r'(date|transaction date)',
+        'description': r'(description|details|merchant|payee)',
+        'debit': r'(debit|money out|out)',
+        'credit': r'(credit|money in|in)',
+        'balance': r'(balance|running balance)'
+    }
+    
+    for col_name, pattern in patterns.items():
+        match = re.search(pattern, header_lower)
+        if match:
+            columns[col_name] = match.span()
+    
+    return columns
+
+def extract_by_column_position(line: str, columns: Dict[str, Tuple[int, int]]) -> Dict[str, str]:
+    """
+    Extract values from a line based on column positions
+    """
+    values = {}
+    
+    # Sort columns by position
+    sorted_cols = sorted(columns.items(), key=lambda x: x[1][0])
+    
+    for i, (col_name, (start, end)) in enumerate(sorted_cols):
+        # Determine the actual end position (start of next column or end of line)
+        if i < len(sorted_cols) - 1:
+            actual_end = sorted_cols[i + 1][1][0]
+        else:
+            actual_end = len(line)
+        
+        # Extract value
+        value = line[start:actual_end].strip()
+        values[col_name] = value
+    
+    return values
+
+def create_transaction_from_columns(values: Dict[str, str], 
+                                   columns: Dict[str, Tuple[int, int]]) -> Optional[Dict[str, Any]]:
+    """
+    Create a transaction from extracted column values
+    """
+    transaction = {
+        'date': None,
+        'description': None,
+        'debit': None,
+        'credit': None,
+        'balance': None
+    }
+    
+    # Parse date
+    if 'date' in values and values['date']:
+        transaction['date'] = parse_date_flexible(values['date'], None)
+    
+    # Set description
+    if 'description' in values:
+        transaction['description'] = values['description']
+    
+    # Parse amounts
+    for amt_type in ['debit', 'credit', 'balance']:
+        if amt_type in values and values[amt_type]:
+            clean_val = values[amt_type].replace('£', '').replace(',', '').strip()
+            if clean_val and clean_val != '-':
+                try:
+                    transaction[amt_type] = abs(float(clean_val))
+                except:
+                    pass
+    
+    return transaction if transaction['date'] else None
+
+def parse_date_flexible(date_str: str, hint_format: Optional[str] = None) -> Optional[str]:
+    """
+    Flexible date parser that tries multiple formats
     """
     if not date_str:
         return None
     
-    # Clean the date string
-    date_str = re.sub(r'[^\d/\-\w\s]', '', date_str).strip()
+    date_str = date_str.strip()
     
-    # Common date formats
+    # If we have a hint format, try it first
+    if hint_format:
+        try:
+            date_obj = datetime.strptime(date_str, hint_format)
+            return date_obj.strftime('%Y-%m-%d')
+        except:
+            pass
+    
+    # Try common UK formats
     formats = [
-        '%d/%m/%Y', '%d-%m-%Y', '%d/%m/%y', '%d-%m-%y',
-        '%d %b %Y', '%d %B %Y', '%d%b%Y', '%d%b%y',
-        '%Y-%m-%d', '%Y/%m/%d'
+        '%d/%m/%Y', '%d/%m/%y',
+        '%d-%m-%Y', '%d-%m-%y',
+        '%d %b %Y', '%d %b %y',
+        '%d %B %Y', '%d %B %y',
+        '%d%b%Y', '%d%b%y',
     ]
     
     for fmt in formats:
         try:
             date_obj = datetime.strptime(date_str, fmt)
+            # Handle 2-digit years
+            if date_obj.year < 100:
+                date_obj = date_obj.replace(year=date_obj.year + 2000)
             return date_obj.strftime('%Y-%m-%d')
-        except ValueError:
+        except:
             continue
     
-    # Try more flexible parsing
-    try:
-        # Handle cases like "01Jan2024"
-        match = re.match(r'(\d{1,2})(\w{3})(\d{2,4})', date_str)
-        if match:
-            day, month_abbr, year = match.groups()
-            if len(year) == 2:
-                year = '20' + year if int(year) < 50 else '19' + year
-            
-            month_map = {
-                'jan': '01', 'feb': '02', 'mar': '03', 'apr': '04',
-                'may': '05', 'jun': '06', 'jul': '07', 'aug': '08',
-                'sep': '09', 'oct': '10', 'nov': '11', 'dec': '12'
-            }
-            
-            month = month_map.get(month_abbr.lower())
-            if month:
-                return f"{year}-{month}-{day.zfill(2)}"
-        
-    except Exception:
-        pass
-    
-    logger.warning(f"Could not parse date: {date_str}")
     return None
 
-def categorize_amounts(amounts: List[Tuple[float, int, int]], line: str) -> Tuple[Optional[float], Optional[float], Optional[float]]:
+def clean_and_validate_transactions(df: pd.DataFrame) -> pd.DataFrame:
     """
-    Categorize amounts as debit, credit, or balance
-    """
-    if not amounts:
-        return None, None, None
-    
-    # Sort amounts by position in line
-    amounts_sorted = sorted(amounts, key=lambda x: x[1])
-    values = [amt[0] for amt in amounts_sorted]
-    
-    # Simple heuristics for categorization
-    if len(values) == 1:
-        # Single amount - check context for debit/credit
-        amount = values[0]
-        line_lower = line.lower()
-        if any(word in line_lower for word in ['dr', 'debit', 'withdrawal', 'payment', 'fee']):
-            return amount, None, None
-        else:
-            return None, amount, None
-    
-    elif len(values) == 2:
-        # Two amounts - likely transaction amount and balance
-        return values[0], None, values[1]
-    
-    elif len(values) == 3:
-        # Three amounts - likely debit, credit, balance
-        return values[0], values[1], values[2]
-    
-    else:
-        # Multiple amounts - take last as balance, first as transaction
-        return values[0], None, values[-1]
-
-def extract_column_positions(header_line: str) -> List[Tuple[str, int, int]]:
-    """
-    Extract column names and their positions from header line
-    """
-    columns = []
-    words = re.finditer(r'\S+', header_line)
-    
-    for match in words:
-        word = match.group().lower()
-        start, end = match.span()
-        columns.append((word, start, end))
-    
-    return columns
-
-def extract_values_by_positions(line: str, columns: List[Tuple[str, int, int]]) -> List[str]:
-    """
-    Extract values from line based on column positions
-    """
-    values = []
-    
-    for i, (col_name, start, end) in enumerate(columns):
-        # Determine the end position for this column
-        next_start = columns[i + 1][1] if i + 1 < len(columns) else len(line)
-        
-        # Extract value from the line
-        value = line[start:next_start].strip()
-        values.append(value)
-    
-    return values
-
-def parse_tabular_row(values: List[str]) -> Optional[Dict[str, Any]]:
-    """
-    Parse a row of tabular data into a transaction
-    """
-    if len(values) < 3:
-        return None
-    
-    # Assume first value is date
-    date_str = values[0]
-    parsed_date = parse_date(date_str)
-    
-    if not parsed_date:
-        return None
-    
-    # Second value is description
-    description = values[1]
-    
-    # Remaining values are amounts
-    amounts = []
-    for val in values[2:]:
-        # Clean and parse amount
-        clean_val = re.sub(r'[£$€,]', '', val).strip()
-        if re.match(r'^-?\d+\.?\d*$', clean_val):
-            try:
-                amounts.append(float(clean_val))
-            except ValueError:
-                continue
-    
-    # Categorize amounts
-    debit, credit, balance = None, None, None
-    
-    if len(amounts) >= 1:
-        debit = amounts[0] if amounts[0] < 0 else None
-        credit = amounts[0] if amounts[0] > 0 else None
-    
-    if len(amounts) >= 2:
-        balance = amounts[-1]  # Last amount is typically balance
-    
-    return {
-        'date': parsed_date,
-        'description': description,
-        'debit': abs(debit) if debit else None,
-        'credit': credit,
-        'balance': balance
-    }
-
-def clean_transaction_data(df: pd.DataFrame) -> pd.DataFrame:
-    """
-    Clean and validate transaction data
+    Clean and validate the transactions DataFrame
     """
     if df.empty:
         return df
     
-    # Ensure required columns exist
-    required_columns = ['date', 'description', 'debit', 'credit', 'balance']
-    for col in required_columns:
+    # Ensure required columns
+    required_cols = ['date', 'description', 'debit', 'credit', 'balance']
+    for col in required_cols:
         if col not in df.columns:
             df[col] = None
     
-    # Clean descriptions
-    df['description'] = df['description'].fillna('').astype(str)
-    df['description'] = df['description'].apply(lambda x: re.sub(r'\s+', ' ', x.strip()))
+    # Remove invalid rows
+    df = df[df['date'].notna()]  # Must have a date
     
-    # Ensure numeric columns are properly typed
+    # Clean descriptions
+    df['description'] = df['description'].fillna('Transaction')
+    df['description'] = df['description'].str.strip()
+    df['description'] = df['description'].str.replace(r'\s+', ' ', regex=True)
+    
+    # Ensure numeric columns are float
     for col in ['debit', 'credit', 'balance']:
         df[col] = pd.to_numeric(df[col], errors='coerce')
     
-    # Remove rows with no date
-    df = df.dropna(subset=['date'])
+    # Sort by date
+    df = df.sort_values('date', na_position='last')
     
-    # Remove completely empty transactions
-    df = df[
-        df['description'].str.len() > 0 | 
-        df['debit'].notna() | 
-        df['credit'].notna() | 
-        df['balance'].notna()
-    ]
+    # Remove duplicates (same date, description, and amounts)
+    df = df.drop_duplicates(subset=['date', 'description', 'debit', 'credit'], keep='first')
+    
+    # Reset index
+    df = df.reset_index(drop=True)
     
     return df

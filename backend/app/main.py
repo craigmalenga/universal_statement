@@ -484,6 +484,136 @@ async def cleanup_session(session_id: str):
     
     return {"message": "Files and logs cleaned up successfully"}
 
+# Add this to your main.py for debugging
+
+@app.post("/test-extraction")
+async def test_extraction(file: UploadFile = File(...)):
+    """
+    Test extraction and parsing - returns detailed analysis
+    """
+    session_id = str(uuid.uuid4())
+    temp_pdf_path = TEMP_DIR / f"{session_id}_input.pdf"
+    
+    try:
+        # Save uploaded file
+        content = await file.read()
+        with open(temp_pdf_path, "wb") as f:
+            f.write(content)
+        
+        # Try different extraction methods
+        results = {
+            "session_id": session_id,
+            "filename": file.filename,
+            "extraction_methods": {}
+        }
+        
+        # Method 1: PDFPlumber text extraction
+        try:
+            import pdfplumber
+            text_lines = []
+            with pdfplumber.open(temp_pdf_path) as pdf:
+                for page_num, page in enumerate(pdf.pages):
+                    text = page.extract_text()
+                    if text:
+                        lines = text.split('\n')
+                        for line in lines:
+                            if line.strip():
+                                text_lines.append({
+                                    'page': page_num + 1,
+                                    'line': line.strip()
+                                })
+            
+            results["extraction_methods"]["pdfplumber"] = {
+                "success": True,
+                "total_lines": len(text_lines),
+                "sample_lines": text_lines[:50],  # First 50 lines
+                "lines_with_dates": sum(1 for l in text_lines if re.search(r'\d{2}/\d{2}/\d{4}', l['line'])),
+                "lines_with_amounts": sum(1 for l in text_lines if re.search(r'£?\d+\.\d{2}', l['line']))
+            }
+        except Exception as e:
+            results["extraction_methods"]["pdfplumber"] = {
+                "success": False,
+                "error": str(e)
+            }
+        
+        # Method 2: Try table extraction with pdfplumber
+        try:
+            import pdfplumber
+            all_tables = []
+            with pdfplumber.open(temp_pdf_path) as pdf:
+                for page_num, page in enumerate(pdf.pages):
+                    tables = page.extract_tables()
+                    for table in tables:
+                        if table:
+                            all_tables.append({
+                                'page': page_num + 1,
+                                'rows': len(table),
+                                'cols': len(table[0]) if table else 0,
+                                'sample': table[:5] if len(table) > 5 else table
+                            })
+            
+            results["extraction_methods"]["pdfplumber_tables"] = {
+                "success": True,
+                "tables_found": len(all_tables),
+                "table_info": all_tables
+            }
+        except Exception as e:
+            results["extraction_methods"]["pdfplumber_tables"] = {
+                "success": False,
+                "error": str(e)
+            }
+        
+        # Now test parsing
+        from .parsing import parse_transactions, extract_all_transaction_lines, preprocess_content
+        
+        # Get the best extracted content
+        raw_content = ""
+        if results["extraction_methods"].get("pdfplumber", {}).get("success"):
+            raw_content = '\n'.join([l['line'] for l in text_lines])
+        
+        if raw_content:
+            # Preprocess
+            processed_content = preprocess_content(raw_content)
+            
+            # Try extraction
+            transactions = extract_all_transaction_lines(processed_content)
+            
+            results["parsing_results"] = {
+                "raw_content_length": len(raw_content),
+                "processed_content_length": len(processed_content),
+                "transactions_found": len(transactions),
+                "sample_transactions": transactions[:10] if transactions else [],
+                "content_preview": processed_content[:1000]  # First 1000 chars
+            }
+            
+            # Try full parsing
+            df = parse_transactions(raw_content)
+            if not df.empty:
+                results["dataframe_results"] = {
+                    "rows": len(df),
+                    "columns": list(df.columns),
+                    "sample_data": df.head(10).to_dict('records')
+                }
+        
+        # Save detailed results to file
+        output_file = TEMP_DIR / f"{session_id}_debug.json"
+        with open(output_file, 'w') as f:
+            import json
+            json.dump(results, f, indent=2, default=str)
+        
+        return JSONResponse(content=results)
+        
+    except Exception as e:
+        return JSONResponse(
+            status_code=500,
+            content={"error": str(e), "traceback": traceback.format_exc()}
+        )
+    finally:
+        # Cleanup
+        if temp_pdf_path.exists():
+            temp_pdf_path.unlink()
+
+
 # Startup event
 @app.on_event("startup")
 async def startup_event():
@@ -512,6 +642,7 @@ async def startup_event():
                 logger.warning(f"Could not clean {old_file}: {str(e)}")
     
     logger.info("Startup complete")
+    
 
 if __name__ == "__main__":
     import uvicorn
