@@ -1,12 +1,25 @@
-# backend/requirements.txt - FIXED VERSION
+
+# backend/requirements.txt - ENHANCED VERSION
+# Core dependencies
 fastapi==0.104.1
 uvicorn[standard]==0.24.0
 python-multipart==0.0.6
+
+# PDF processing
 pdfplumber==0.10.3
-# Removed pdfminer.six - let pdfplumber handle its own dependency
 pdf2image==1.16.3
 pytesseract==0.3.10
+
+# Table extraction (optional but recommended)
+camelot-py[cv]==0.11.0  # For better table extraction
+tabula-py==2.9.0  # Alternative table extraction
 pandas==2.1.4
+
+# Export
 openpyxl==3.1.2
+
+# Image processing
 Pillow==10.1.0
+
+# System monitoring
 psutil==5.9.6

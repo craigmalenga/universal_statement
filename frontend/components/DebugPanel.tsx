@@ -1,4 +1,4 @@
-// frontend/components/DebugPanel.tsx
+// frontend/components/DebugPanel.tsx - ENHANCED VERSION
 import { useState } from 'react'
 
 interface DebugPanelProps {
@@ -39,7 +39,7 @@ interface ConversionResult {
 }
 
 export default function DebugPanel({ logs, errorDetails, result, onClose }: DebugPanelProps) {
-  const [activeTab, setActiveTab] = useState<'logs' | 'raw' | 'details' | 'transactions'>('logs')
+  const [activeTab, setActiveTab] = useState<'logs' | 'raw' | 'details' | 'transactions' | 'extracted'>('logs')
   const [expandedLogIndex, setExpandedLogIndex] = useState<number | null>(null)
 
   const getLogColor = (level: string) => {
@@ -68,6 +68,11 @@ export default function DebugPanel({ logs, errorDetails, result, onClose }: Debu
 
   const rawContent = errorDetails?.raw_content || result?.raw_content_preview || ''
   const hasRawContent = rawContent.length > 0
+  
+  // Get extracted text from extraction details
+  const extractedText = result?.extraction_details?.all_extracted_text || 
+                        result?.extraction_details?.raw_text_preview || ''
+  const hasExtractedText = extractedText.length > 0
 
   return (
     <div className="fixed inset-0 bg-black bg-opacity-50 z-50 flex items-center justify-center p-4">
@@ -93,10 +98,10 @@ export default function DebugPanel({ logs, errorDetails, result, onClose }: Debu
         </div>
 
         {/* Tabs */}
-        <div className="px-6 py-3 border-b border-gray-200 flex gap-4">
+        <div className="px-6 py-3 border-b border-gray-200 flex gap-4 overflow-x-auto">
           <button
             onClick={() => setActiveTab('logs')}
-            className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+            className={`px-4 py-2 rounded-lg font-medium transition-colors whitespace-nowrap ${
               activeTab === 'logs' 
                 ? 'bg-blue-100 text-blue-700' 
                 : 'text-gray-600 hover:bg-gray-100'
@@ -105,23 +110,39 @@ export default function DebugPanel({ logs, errorDetails, result, onClose }: Debu
             Logs ({logs.length})
           </button>
           
+          {hasExtractedText && (
+            <button
+              onClick={() => setActiveTab('extracted')}
+              className={`px-4 py-2 rounded-lg font-medium transition-colors whitespace-nowrap ${
+                activeTab === 'extracted' 
+                  ? 'bg-blue-100 text-blue-700' 
+                  : 'text-gray-600 hover:bg-gray-100'
+              }`}
+            >
+              Extracted Text
+              {result?.extraction_details?.method && (
+                <span className="ml-1 text-xs">({result.extraction_details.method})</span>
+              )}
+            </button>
+          )}
+          
           {hasRawContent && (
             <button
               onClick={() => setActiveTab('raw')}
-              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+              className={`px-4 py-2 rounded-lg font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'raw' 
                   ? 'bg-blue-100 text-blue-700' 
                   : 'text-gray-600 hover:bg-gray-100'
               }`}
             >
-              Raw Text
+              Parsed Preview
             </button>
           )}
           
           {(result?.extraction_details || result?.parsing_details) && (
             <button
               onClick={() => setActiveTab('details')}
-              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+              className={`px-4 py-2 rounded-lg font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'details' 
                   ? 'bg-blue-100 text-blue-700' 
                   : 'text-gray-600 hover:bg-gray-100'
@@ -134,13 +155,13 @@ export default function DebugPanel({ logs, errorDetails, result, onClose }: Debu
           {result?.sample_transactions && result.sample_transactions.length > 0 && (
             <button
               onClick={() => setActiveTab('transactions')}
-              className={`px-4 py-2 rounded-lg font-medium transition-colors ${
+              className={`px-4 py-2 rounded-lg font-medium transition-colors whitespace-nowrap ${
                 activeTab === 'transactions' 
                   ? 'bg-blue-100 text-blue-700' 
                   : 'text-gray-600 hover:bg-gray-100'
               }`}
             >
-              Sample Data
+              Sample Data ({result.sample_transactions.length})
             </button>
           )}
         </div>
@@ -199,11 +220,87 @@ export default function DebugPanel({ logs, errorDetails, result, onClose }: Debu
             </div>
           )}
 
+          {activeTab === 'extracted' && hasExtractedText && (
+            <div className="space-y-4">
+              <div className="flex justify-between items-center">
+                <h3 className="font-medium text-gray-900">
+                  Extracted Text from PDF 
+                  {result?.extraction_details?.method && (
+                    <span className="ml-2 text-sm text-gray-600">
+                      (Method: {result.extraction_details.method})
+                    </span>
+                  )}
+                </h3>
+                <div className="flex gap-2">
+                  <span className="text-sm text-gray-500">
+                    {extractedText.length} characters
+                  </span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(extractedText)
+                      alert('Copied to clipboard!')
+                    }}
+                    className="px-3 py-1 text-sm bg-gray-600 text-white rounded hover:bg-gray-700"
+                  >
+                    Copy All
+                  </button>
+                </div>
+              </div>
+              
+              <div className="bg-gray-900 rounded-lg p-4 max-h-[600px] overflow-y-auto">
+                <pre className="text-green-400 font-mono text-xs whitespace-pre-wrap break-words">
+                  {extractedText}
+                </pre>
+              </div>
+              
+              {/* Show extraction method details */}
+              {result?.extraction_details && (
+                <div className="mt-4 p-4 bg-blue-50 rounded-lg">
+                  <h4 className="font-medium text-blue-900 mb-2">Extraction Methods Tried:</h4>
+                  <ul className="space-y-1 text-sm">
+                    {result.extraction_details.text_extraction_result && (
+                      <li className="flex justify-between">
+                        <span>PDFPlumber Text:</span>
+                        <span className="font-medium">
+                          {result.extraction_details.text_extraction_result.content_length} chars
+                        </span>
+                      </li>
+                    )}
+                    {result.extraction_details.camelot_result && (
+                      <li className="flex justify-between">
+                        <span>Camelot Tables:</span>
+                        <span className="font-medium">
+                          {result.extraction_details.camelot_result.success ? 'Success' : 'Failed'}
+                        </span>
+                      </li>
+                    )}
+                    {result.extraction_details.tabula_result && (
+                      <li className="flex justify-between">
+                        <span>Tabula Tables:</span>
+                        <span className="font-medium">
+                          {result.extraction_details.tabula_result.success ? 'Success' : 'Failed'}
+                        </span>
+                      </li>
+                    )}
+                    {result.extraction_details.ocr_result && (
+                      <li className="flex justify-between">
+                        <span>OCR (Tesseract):</span>
+                        <span className="font-medium">
+                          {result.extraction_details.ocr_result.content_length} chars
+                        </span>
+                      </li>
+                    )}
+                  </ul>
+                </div>
+              )}
+            </div>
+          )}
+
           {activeTab === 'raw' && hasRawContent && (
             <div className="space-y-4">
               <div className="flex justify-between items-center">
                 <h3 className="font-medium text-gray-900">
-                  Extracted Text Content ({rawContent.length} characters)
+                  Parsed Content Preview ({rawContent.length} characters)
                 </h3>
                 <button
                   onClick={() => {
@@ -254,22 +351,25 @@ export default function DebugPanel({ logs, errorDetails, result, onClose }: Debu
                           </dd>
                         </div>
                       )}
-                      {result.extraction_details.text_extraction_result && (
-                        <div className="mt-3 pt-3 border-t border-gray-200">
-                          <p className="text-sm font-medium text-gray-700 mb-2">Text Extraction Result:</p>
-                          <pre className="text-xs bg-white rounded p-2">
-                            {JSON.stringify(result.extraction_details.text_extraction_result, null, 2)}
-                          </pre>
+                      {/* Show all extraction attempts */}
+                      <div className="mt-3 pt-3 border-t border-gray-200">
+                        <p className="text-sm font-medium text-gray-700 mb-2">Methods Attempted:</p>
+                        <div className="space-y-1">
+                          {['text_extraction_result', 'camelot_result', 'tabula_result', 'ocr_result'].map(method => {
+                            const methodData = result.extraction_details[method]
+                            if (!methodData) return null
+                            return (
+                              <div key={method} className="flex justify-between text-xs">
+                                <span className="text-gray-600">{method.replace('_', ' ')}:</span>
+                                <span className="font-medium">
+                                  {methodData.content_length ? `${methodData.content_length} chars` : 
+                                   methodData.success ? 'Success' : 'Failed'}
+                                </span>
+                              </div>
+                            )
+                          })}
                         </div>
-                      )}
-                      {result.extraction_details.ocr_result && (
-                        <div className="mt-3 pt-3 border-t border-gray-200">
-                          <p className="text-sm font-medium text-gray-700 mb-2">OCR Result:</p>
-                          <pre className="text-xs bg-white rounded p-2">
-                            {JSON.stringify(result.extraction_details.ocr_result, null, 2)}
-                          </pre>
-                        </div>
-                      )}
+                      </div>
                     </dl>
                   </div>
                 </div>

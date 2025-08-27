@@ -315,56 +315,110 @@ async def convert_bank_statement(
 
 
 
+
 def extract_pdf_content_with_debug(pdf_path: str, session_id: str) -> tuple[str, dict]:
-    """Enhanced extraction with debugging info"""
+    """Enhanced extraction with debugging info and multiple methods"""
     from .extraction import extract_text_from_pdf, extract_text_with_ocr, is_meaningful_text, normalize_text
     
     extraction_details = {
         "method": None,
         "pages_processed": 0,
         "text_extraction_result": None,
-        "ocr_result": None
+        "ocr_result": None,
+        "camelot_result": None,
+        "tabula_result": None,
+        "raw_text_preview": None,  # Add preview for debug panel
+        "all_extracted_text": ""   # Store all text for debugging
     }
     
     try:
-        # Try text extraction
-        add_debug_log(session_id, "DEBUG", "Attempting text extraction")
+        # Method 1: Try standard text extraction with pdfplumber
+        add_debug_log(session_id, "DEBUG", "Attempting text extraction with pdfplumber")
         text_content = extract_text_from_pdf(pdf_path)
         extraction_details["text_extraction_result"] = {
             "content_length": len(text_content),
-            "has_content": bool(text_content.strip())
+            "has_content": bool(text_content.strip()),
+            "first_1000_chars": text_content[:1000] if text_content else ""
         }
         
         if is_meaningful_text(text_content):
             add_debug_log(session_id, "DEBUG", "Text extraction successful")
             extraction_details["method"] = "text_extraction"
+            extraction_details["all_extracted_text"] = text_content
+            extraction_details["raw_text_preview"] = text_content[:3000]  # For debug panel
             return normalize_text(text_content), extraction_details
         
-        # Fallback to OCR
+        # Method 2: Try Camelot for table extraction
+        add_debug_log(session_id, "DEBUG", "Trying Camelot table extraction")
+        camelot_content = extract_with_camelot(str(pdf_path), session_id)
+        if camelot_content:
+            extraction_details["camelot_result"] = {
+                "content_length": len(camelot_content),
+                "success": True
+            }
+            if is_meaningful_text(camelot_content):
+                add_debug_log(session_id, "DEBUG", "Camelot extraction successful")
+                extraction_details["method"] = "camelot"
+                extraction_details["all_extracted_text"] = camelot_content
+                extraction_details["raw_text_preview"] = camelot_content[:3000]
+                return normalize_text(camelot_content), extraction_details
+        else:
+            extraction_details["camelot_result"] = {
+                "content_length": 0,
+                "success": False
+            }
+        
+        # Method 3: Try Tabula for table extraction
+        add_debug_log(session_id, "DEBUG", "Trying Tabula table extraction")
+        tabula_content = extract_with_tabula(str(pdf_path), session_id)
+        if tabula_content:
+            extraction_details["tabula_result"] = {
+                "content_length": len(tabula_content),
+                "success": True
+            }
+            if is_meaningful_text(tabula_content):
+                add_debug_log(session_id, "DEBUG", "Tabula extraction successful")
+                extraction_details["method"] = "tabula"
+                extraction_details["all_extracted_text"] = tabula_content
+                extraction_details["raw_text_preview"] = tabula_content[:3000]
+                return normalize_text(tabula_content), extraction_details
+        else:
+            extraction_details["tabula_result"] = {
+                "content_length": 0,
+                "success": False
+            }
+        
+        # Method 4: Fallback to OCR for scanned documents
         add_debug_log(session_id, "DEBUG", "Text extraction insufficient, trying OCR")
-        ocr_content = extract_text_with_ocr(pdf_path)
+        ocr_content = extract_text_with_ocr(str(pdf_path))
         extraction_details["ocr_result"] = {
             "content_length": len(ocr_content),
-            "has_content": bool(ocr_content.strip())
+            "has_content": bool(ocr_content.strip()),
+            "first_1000_chars": ocr_content[:1000] if ocr_content else ""
         }
         
         if is_meaningful_text(ocr_content):
             add_debug_log(session_id, "DEBUG", "OCR extraction successful")
             extraction_details["method"] = "ocr"
+            extraction_details["all_extracted_text"] = ocr_content
+            extraction_details["raw_text_preview"] = ocr_content[:3000]
             return normalize_text(ocr_content), extraction_details
         
-        # Both methods failed
-        add_debug_log(session_id, "WARNING", "Both extraction methods produced insufficient content")
-        extraction_details["method"] = "failed"
+        # All methods failed - return best result
+        add_debug_log(session_id, "WARNING", "All extraction methods produced insufficient content")
+        extraction_details["method"] = "fallback"
         
-        # Return whatever we got
-        return text_content or ocr_content, extraction_details
+        # Return the best content we got
+        best_content = text_content or camelot_content or tabula_content or ocr_content
+        extraction_details["all_extracted_text"] = best_content
+        extraction_details["raw_text_preview"] = best_content[:3000] if best_content else ""
+        
+        return best_content, extraction_details
         
     except Exception as e:
         add_debug_log(session_id, "ERROR", f"Extraction error: {str(e)}")
         extraction_details["error"] = str(e)
         raise
-
 
 
 def parse_transactions_with_debug(raw_content: str, session_id: str) -> tuple:
@@ -398,7 +452,6 @@ def parse_transactions_with_debug(raw_content: str, session_id: str) -> tuple:
         add_debug_log(session_id, "ERROR", f"Parsing error: {str(e)}")
         parsing_details["error"] = str(e)
         raise
-
 
 @app.get("/download/{session_id}/excel")
 async def download_excel(session_id: str):
@@ -577,6 +630,88 @@ async def test_extraction(file: UploadFile = File(...)):
         # Cleanup
         if temp_pdf_path.exists():
             temp_pdf_path.unlink()
+
+
+def extract_with_camelot(pdf_path: str, session_id: str) -> str:
+    """Try extraction with Camelot (specialized for tables)"""
+    try:
+        import camelot
+        import pandas as pd
+        
+        add_debug_log(session_id, "DEBUG", "Camelot: Reading tables from PDF")
+        
+        # Try both flavors - lattice (for bordered tables) and stream (for borderless)
+        all_text = []
+        
+        # Try lattice first (better for bank statements with borders)
+        try:
+            tables = camelot.read_pdf(pdf_path, pages='all', flavor='lattice')
+            for table in tables:
+                if not table.df.empty:
+                    # Convert table to text line by line
+                    for _, row in table.df.iterrows():
+                        row_text = ' '.join(str(cell) for cell in row if pd.notna(cell))
+                        if row_text.strip():
+                            all_text.append(row_text)
+            add_debug_log(session_id, "DEBUG", f"Camelot lattice: found {len(tables)} tables")
+        except Exception as e:
+            add_debug_log(session_id, "DEBUG", f"Camelot lattice failed: {str(e)}")
+        
+        # If no tables found, try stream flavor
+        if not all_text:
+            try:
+                tables = camelot.read_pdf(pdf_path, pages='all', flavor='stream')
+                for table in tables:
+                    if not table.df.empty:
+                        for _, row in table.df.iterrows():
+                            row_text = ' '.join(str(cell) for cell in row if pd.notna(cell))
+                            if row_text.strip():
+                                all_text.append(row_text)
+                add_debug_log(session_id, "DEBUG", f"Camelot stream: found {len(tables)} tables")
+            except Exception as e:
+                add_debug_log(session_id, "DEBUG", f"Camelot stream failed: {str(e)}")
+        
+        result = '\n'.join(all_text)
+        add_debug_log(session_id, "INFO", f"Camelot: Extracted {len(all_text)} lines total")
+        return result
+        
+    except ImportError:
+        add_debug_log(session_id, "WARNING", "Camelot not installed")
+        return ""
+    except Exception as e:
+        add_debug_log(session_id, "WARNING", f"Camelot extraction failed: {str(e)}")
+        return ""
+
+def extract_with_tabula(pdf_path: str, session_id: str) -> str:
+    """Try extraction with Tabula (Java-based table extractor)"""
+    try:
+        import tabula
+        import pandas as pd
+        
+        add_debug_log(session_id, "DEBUG", "Tabula: Reading tables from PDF")
+        
+        # Read all tables from all pages
+        dfs = tabula.read_pdf(pdf_path, pages='all', multiple_tables=True, silent=True)
+        
+        all_text = []
+        for df in dfs:
+            if not df.empty:
+                # Convert each table row to text
+                for _, row in df.iterrows():
+                    row_text = ' '.join(str(cell) for cell in row if pd.notna(cell))
+                    if row_text.strip():
+                        all_text.append(row_text)
+        
+        result = '\n'.join(all_text)
+        add_debug_log(session_id, "INFO", f"Tabula: Extracted {len(all_text)} lines from {len(dfs)} tables")
+        return result
+        
+    except ImportError:
+        add_debug_log(session_id, "WARNING", "Tabula not installed")
+        return ""
+    except Exception as e:
+        add_debug_log(session_id, "WARNING", f"Tabula extraction failed: {str(e)}")
+        return ""
 
 
 # Startup event
