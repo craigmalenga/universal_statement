@@ -314,6 +314,7 @@ async def convert_bank_statement(
         }
 
 
+
 def extract_pdf_content_with_debug(pdf_path: str, session_id: str) -> tuple[str, dict]:
     """Enhanced extraction with debugging info"""
     from .extraction import extract_text_from_pdf, extract_text_with_ocr, is_meaningful_text, normalize_text
@@ -364,76 +365,40 @@ def extract_pdf_content_with_debug(pdf_path: str, session_id: str) -> tuple[str,
         extraction_details["error"] = str(e)
         raise
 
+
+
 def parse_transactions_with_debug(raw_content: str, session_id: str) -> tuple:
-    """Enhanced parsing with debugging info"""
-    from .parsing import parse_standard_uk_format, parse_tabular_format, parse_line_by_line, clean_transaction_data, preprocess_content
+    """Enhanced parsing with debugging info - MUCH SIMPLER!"""
+    from .parsing import parse_transactions  # Only need this one import now!
     import pandas as pd
     
     parsing_details = {
-        "strategy_used": None,
-        "strategies_tried": [],
+        "strategy_used": "universal_parser",
+        "strategies_tried": ["comprehensive"],
         "transactions_per_strategy": {}
     }
     
     try:
-        # Preprocess content
-        content = preprocess_content(raw_content)
-        add_debug_log(session_id, "DEBUG", "Content preprocessed", {
-            "original_length": len(raw_content),
-            "processed_length": len(content)
-        })
+        # Use the new universal parser - it handles everything!
+        add_debug_log(session_id, "DEBUG", "Starting universal transaction parsing")
         
-        transactions = []
+        transactions_df = parse_transactions(raw_content)
         
-        # Try Strategy 1: Standard UK format
-        add_debug_log(session_id, "DEBUG", "Trying standard UK format parsing")
-        transactions = parse_standard_uk_format(content)
-        parsing_details["strategies_tried"].append("standard_uk")
-        parsing_details["transactions_per_strategy"]["standard_uk"] = len(transactions)
+        parsing_details["transactions_per_strategy"]["universal"] = len(transactions_df)
         
-        if transactions:
-            parsing_details["strategy_used"] = "standard_uk"
-            add_debug_log(session_id, "DEBUG", f"Standard UK format found {len(transactions)} transactions")
+        if not transactions_df.empty:
+            add_debug_log(session_id, "DEBUG", f"Universal parser found {len(transactions_df)} transactions")
+            parsing_details["strategy_used"] = "universal_parser"
+        else:
+            add_debug_log(session_id, "WARNING", "No transactions found with universal parser")
         
-        # Try Strategy 2: Tabular format
-        if not transactions:
-            add_debug_log(session_id, "DEBUG", "Trying tabular format parsing")
-            transactions = parse_tabular_format(content)
-            parsing_details["strategies_tried"].append("tabular")
-            parsing_details["transactions_per_strategy"]["tabular"] = len(transactions)
-            
-            if transactions:
-                parsing_details["strategy_used"] = "tabular"
-                add_debug_log(session_id, "DEBUG", f"Tabular format found {len(transactions)} transactions")
-        
-        # Try Strategy 3: Line-by-line
-        if not transactions:
-            add_debug_log(session_id, "DEBUG", "Trying line-by-line parsing")
-            transactions = parse_line_by_line(content)
-            parsing_details["strategies_tried"].append("line_by_line")
-            parsing_details["transactions_per_strategy"]["line_by_line"] = len(transactions)
-            
-            if transactions:
-                parsing_details["strategy_used"] = "line_by_line"
-                add_debug_log(session_id, "DEBUG", f"Line-by-line found {len(transactions)} transactions")
-        
-        if not transactions:
-            add_debug_log(session_id, "WARNING", "No transactions found with any strategy")
-            return pd.DataFrame(), parsing_details
-        
-        # Convert to DataFrame
-        df = pd.DataFrame(transactions)
-        df = clean_transaction_data(df)
-        df = df.sort_values('date').reset_index(drop=True)
-        
-        add_debug_log(session_id, "DEBUG", f"Final DataFrame created with {len(df)} transactions")
-        
-        return df, parsing_details
+        return transactions_df, parsing_details
         
     except Exception as e:
         add_debug_log(session_id, "ERROR", f"Parsing error: {str(e)}")
         parsing_details["error"] = str(e)
         raise
+
 
 @app.get("/download/{session_id}/excel")
 async def download_excel(session_id: str):
