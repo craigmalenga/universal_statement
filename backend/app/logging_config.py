@@ -1,6 +1,7 @@
-# backend/app/logging_config.py
+# backend/app/logging_config.py - SMART DEBUG MODE
 import logging
 import sys
+import os
 
 def setup_logging(log_level="INFO"):
     """
@@ -27,26 +28,50 @@ def setup_logging(log_level="INFO"):
     root_logger.addHandler(console_handler)
     root_logger.setLevel(getattr(logging, log_level.upper()))
     
-    # CRITICAL: Silence noisy libraries
-    logging.getLogger('pdfminer').setLevel(logging.WARNING)
-    logging.getLogger('pdfminer.psparser').setLevel(logging.ERROR)
-    logging.getLogger('pdfminer.pdfinterp').setLevel(logging.ERROR)
-    logging.getLogger('pdfminer.cmapdb').setLevel(logging.ERROR)
-    logging.getLogger('pdfminer.pdfpage').setLevel(logging.ERROR)
-    logging.getLogger('pdfminer.converter').setLevel(logging.ERROR)
-    logging.getLogger('pdfminer.pdfparser').setLevel(logging.ERROR)
-    logging.getLogger('pdfminer.pdfdocument').setLevel(logging.ERROR)
-    logging.getLogger('pdfminer.layout').setLevel(logging.ERROR)
-    logging.getLogger('pdfplumber').setLevel(logging.WARNING)
-    logging.getLogger('PIL').setLevel(logging.WARNING)
-    logging.getLogger('pytesseract').setLevel(logging.WARNING)
-    logging.getLogger('urllib3').setLevel(logging.WARNING)
+    # CRITICAL: Always silence the extremely noisy libraries regardless of log level
+    noisy_loggers = [
+        'pdfminer',
+        'pdfminer.psparser',
+        'pdfminer.pdfinterp', 
+        'pdfminer.cmapdb',
+        'pdfminer.pdfpage',
+        'pdfminer.converter',
+        'pdfminer.pdfparser',
+        'pdfminer.pdfdocument',
+        'pdfminer.layout',
+        'pdfminer.pdfdevice',
+        'pdfminer.pdffont',
+        'pdfminer.pdfcolor',
+        'pdfminer.psparser',
+        'PIL.PngImagePlugin',
+        'PIL.Image'
+    ]
     
-    # Log only important messages from uvicorn
-    logging.getLogger('uvicorn').setLevel(logging.INFO)
-    logging.getLogger('uvicorn.error').setLevel(logging.INFO)
-    logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
+    for logger_name in noisy_loggers:
+        logging.getLogger(logger_name).setLevel(logging.ERROR)
     
-    # Our app loggers can stay at configured level
-    logging.getLogger('app').setLevel(getattr(logging, log_level.upper()))
-    logging.getLogger('__main__').setLevel(getattr(logging, log_level.upper()))
+    # Set reasonable levels for other libraries
+    if log_level.upper() == "DEBUG":
+        # Even in debug mode, keep libraries quieter
+        logging.getLogger('pdfplumber').setLevel(logging.INFO)
+        logging.getLogger('PIL').setLevel(logging.WARNING)
+        logging.getLogger('pytesseract').setLevel(logging.INFO)
+        logging.getLogger('urllib3').setLevel(logging.WARNING)
+        logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
+        
+        # Our app can be verbose
+        logging.getLogger('app').setLevel(logging.DEBUG)
+        logging.getLogger('__main__').setLevel(logging.DEBUG)
+    else:
+        # Production mode - quiet everything
+        logging.getLogger('pdfplumber').setLevel(logging.WARNING)
+        logging.getLogger('PIL').setLevel(logging.WARNING)
+        logging.getLogger('pytesseract').setLevel(logging.WARNING)
+        logging.getLogger('urllib3').setLevel(logging.WARNING)
+        logging.getLogger('uvicorn').setLevel(logging.INFO)
+        logging.getLogger('uvicorn.error').setLevel(logging.INFO)
+        logging.getLogger('uvicorn.access').setLevel(logging.WARNING)
+        
+        # Our app at configured level
+        logging.getLogger('app').setLevel(getattr(logging, log_level.upper()))
+        logging.getLogger('__main__').setLevel(getattr(logging, log_level.upper()))

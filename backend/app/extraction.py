@@ -195,7 +195,7 @@ def fix_common_ocr_errors(text: str) -> str:
     """
     Fix common OCR recognition errors
     """
-    # Common OCR mistakes
+    # Common OCR mistakes - FIXED GROUP REFERENCES
     replacements = {
         r'£(\s+)': '£',          # Fix currency spacing
         r'\$(\s+)': '$',         # Fix dollar spacing
@@ -203,9 +203,9 @@ def fix_common_ocr_errors(text: str) -> str:
         r'(\d)\s+\.(\d)': r'\1.\2',  # Fix decimal point spacing
         r'(\d)\s+,(\d)': r'\1,\2',   # Fix thousand separator spacing
         r'[Il|]\s*(\d)': r'1\1',     # Fix 1 recognition
-        r'(\d)\s*[Il|]': r'\10',     # Fix 0 recognition at end
-        r'[Oo](\d)': r'0\1',        # Fix O->0 at start
-        r'(\d)[Oo]': r'\10',        # Fix O->0 at end
+        r'(\d)\s*[Il|]': r'\g<1>0',  # FIXED: Use \g<1> instead of \10
+        r'[Oo](\d)': r'0\1',         # Fix O->0 at start
+        r'(\d)[Oo]': r'\g<1>0',      # FIXED: Use \g<1> instead of \10
     }
     
     for pattern, replacement in replacements.items():
