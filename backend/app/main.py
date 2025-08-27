@@ -40,11 +40,10 @@ cors_origins = [
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=cors_origins,
 
     allow_origins=[
         "http://localhost:3000", 
-        "https://frontend-production-358c.up.railway.app"
+        "https://your-frontend-name.railway.app"  # Add your Railway frontend URL
     ],
 
     allow_credentials=True,
