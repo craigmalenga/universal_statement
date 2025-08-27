@@ -12,6 +12,9 @@ import traceback
 import time
 from datetime import datetime
 import json
+import pandas as pd
+import numpy as np
+from decimal import Decimal
 
 # Import logging config BEFORE other modules
 from .logging_config import setup_logging
@@ -110,10 +113,27 @@ async def health_check():
 
 
 
+def safe_json_convert(obj):
+    """Convert numpy/pandas types to JSON-serializable types"""
+    if isinstance(obj, np.integer):
+        return int(obj)
+    elif isinstance(obj, np.floating):
+        return float(obj)
+    elif isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, Decimal):
+        return float(obj)
+    elif isinstance(obj, (np.bool_, bool)):
+        return bool(obj)
+    elif obj is None or pd.isna(obj):
+        return None
+    else:
+        return str(obj)
+
 @app.post("/convert")
 async def convert_bank_statement(
     file: UploadFile = File(...),
-    debug: bool = False  # Can be overridden with ?debug=true
+    debug: bool = False
 ):
     """
     Convert uploaded PDF bank statement to Excel and CSV format
@@ -128,8 +148,8 @@ async def convert_bank_statement(
             "content_type": file.content_type,
             "debug_mode": debug
         })
-    else:
-        logger.info(f"Starting conversion for session {session_id}, file: {file.filename}")
+    
+    logger.info(f"Starting conversion for session {session_id}, file: {file.filename}")
     
     if not file.filename.lower().endswith('.pdf'):
         error_msg = f"Invalid file type: {file.filename}"
@@ -156,8 +176,8 @@ async def convert_bank_statement(
                 "size_mb": round(file_size / (1024*1024), 2),
                 "path": str(temp_pdf_path)
             })
-        else:
-            logger.info(f"File saved: {file_size} bytes")
+        
+        logger.info(f"File saved: {file_size} bytes")
         
         # Validate PDF
         with open(temp_pdf_path, 'rb') as f:
@@ -183,15 +203,13 @@ async def convert_bank_statement(
             if debug:
                 add_debug_log(session_id, "ERROR", error_msg)
             
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": True,
-                    "message": error_msg,
-                    "session_id": session_id,
-                    "debug_logs": debug_logs.get(session_id, []) if debug else None
-                }
-            )
+            # Return simple JSON response
+            return {
+                "error": True,
+                "message": error_msg,
+                "session_id": session_id,
+                "debug_logs": debug_logs.get(session_id, []) if debug else None
+            }
         
         # Parse transactions
         if debug:
@@ -208,17 +226,14 @@ async def convert_bank_statement(
             if debug:
                 add_debug_log(session_id, "WARNING", error_msg)
             
-            # Return error with debug info
-            return JSONResponse(
-                status_code=400,
-                content={
-                    "error": True,
-                    "message": error_msg,
-                    "session_id": session_id,
-                    "debug_logs": debug_logs.get(session_id, []) if debug else None,
-                    "raw_content_preview": raw_content[:2000] if debug and raw_content else None
-                }
-            )
+            # Return simple error response
+            return {
+                "error": True,
+                "message": error_msg,
+                "session_id": session_id,
+                "debug_logs": debug_logs.get(session_id, []) if debug else None,
+                "raw_content_preview": raw_content[:2000] if debug and raw_content else None
+            }
         
         # Export to Excel and CSV
         if debug:
@@ -231,47 +246,56 @@ async def convert_bank_statement(
         
         logger.info(f"Conversion completed for session {session_id}: {len(transactions_df)} transactions in {processing_time:.2f}s")
         
-        # Prepare response - FIXED JSON SERIALIZATION
+        # Prepare BASIC response first
         response_data = {
             "session_id": session_id,
-            "transactions_count": len(transactions_df),
+            "transactions_count": int(len(transactions_df)),  # Ensure it's a Python int
             "excel_url": f"/download/{session_id}/excel",
             "csv_url": f"/download/{session_id}/csv",
-            "processing_time": round(processing_time, 2),
+            "processing_time": round(float(processing_time), 2),  # Ensure it's a Python float
             "success": True
         }
         
-        # Add debug information if requested - SAFELY CONVERT TO JSON-SERIALIZABLE FORMAT
+        # Add debug information SAFELY
         if debug:
             try:
-                # Safely convert DataFrame to dict
+                # Convert sample transactions safely
                 sample_transactions = []
                 if not transactions_df.empty:
-                    # Convert to dict and ensure all values are JSON-serializable
                     sample_df = transactions_df.head(5).copy()
-                    # Convert any dates to strings
-                    for col in sample_df.columns:
-                        if sample_df[col].dtype == 'object':
-                            sample_df[col] = sample_df[col].astype(str)
-                    sample_transactions = sample_df.to_dict('records')
+                    
+                    # Convert DataFrame to records
+                    records = sample_df.to_dict('records')
+                    
+                    # Ensure all values are JSON-serializable
+                    for record in records:
+                        safe_record = {}
+                        for key, value in record.items():
+                            safe_record[key] = safe_json_convert(value)
+                        sample_transactions.append(safe_record)
                 
-                response_data.update({
-                    "debug_logs": debug_logs.get(session_id, []),
-                    "raw_content_preview": raw_content[:2000] if raw_content else None,
-                    "extraction_details": extraction_details,
-                    "parsing_details": parsing_details,
-                    "sample_transactions": sample_transactions
-                })
+                # Add debug info
+                response_data["debug_logs"] = debug_logs.get(session_id, [])
+                response_data["raw_content_preview"] = raw_content[:2000] if raw_content else None
+                response_data["sample_transactions"] = sample_transactions
+                
+                # Only add details if they're safe
+                if extraction_details and isinstance(extraction_details, dict):
+                    response_data["extraction_details"] = extraction_details
+                if parsing_details and isinstance(parsing_details, dict):
+                    response_data["parsing_details"] = parsing_details
+                    
             except Exception as e:
-                logger.error(f"Error preparing debug response: {str(e)}")
-                # If debug data fails, just return basic response
-                response_data["debug_error"] = str(e)
+                logger.error(f"Error preparing debug data: {str(e)}")
+                # Don't add debug data if it fails
+                response_data["debug_error"] = "Failed to prepare debug data"
         
+        # Return the response directly (FastAPI will handle JSON conversion)
         return response_data
         
     except Exception as e:
         error_msg = f"Error processing file: {str(e)}"
-        logger.error(f"Error in session {session_id}: {error_msg}")
+        logger.error(f"Error in session {session_id}: {error_msg}\n{traceback.format_exc()}")
         
         if debug:
             add_debug_log(session_id, "ERROR", error_msg, {
@@ -281,21 +305,14 @@ async def convert_bank_statement(
         # Clean up on error
         cleanup_temp_files(session_id, TEMP_DIR)
         
-        # Return error response - ensure it's JSON serializable
-        error_response = {
+        # Return simple error response
+        return {
             "error": True,
             "message": error_msg,
-            "session_id": session_id
+            "session_id": session_id,
+            "debug_logs": debug_logs.get(session_id, []) if debug else None
         }
-        
-        if debug:
-            error_response["debug_logs"] = debug_logs.get(session_id, [])
-            error_response["traceback"] = traceback.format_exc()
-        
-        return JSONResponse(
-            status_code=500,
-            content=error_response
-        )
+
 
 def extract_pdf_content_with_debug(pdf_path: str, session_id: str) -> tuple[str, dict]:
     """Enhanced extraction with debugging info"""
