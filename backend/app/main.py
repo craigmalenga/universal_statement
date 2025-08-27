@@ -491,14 +491,14 @@ async def startup_event():
                 logger.warning(f"Could not clean {old_file}: {str(e)}")
 
 if __name__ == "__main__":
-    import os
-    import uvicorn
-
+    import os, uvicorn
     port = int(os.environ.get("PORT", "8000"))
     uvicorn.run(
         app,
-        host="::",                 # listen on IPv6 (also covers IPv4)
-        port=port,                 # Railway provides PORT
+        host="0.0.0.0",   # ← switch to IPv4
+        port=port,
         proxy_headers=True,
         log_level="debug",
+        access_log=True,
     )
+
