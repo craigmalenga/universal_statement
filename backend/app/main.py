@@ -1,4 +1,4 @@
-# backend/app/main.py - ENHANCED WITH DEBUGGING
+# backend/app/main.py - PRODUCTION OPTIMIZED
 from fastapi import FastAPI, File, UploadFile, HTTPException, BackgroundTasks
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
@@ -13,35 +13,37 @@ import time
 from datetime import datetime
 import json
 
+# Import logging config BEFORE other modules
+from .logging_config import setup_logging
+
+# Setup logging with appropriate level for production
+# Use INFO for production, DEBUG only for development
+log_level = os.environ.get("LOG_LEVEL", "INFO")
+setup_logging(log_level)
+logger = logging.getLogger(__name__)
+
+# Import after logging setup to ensure proper log filtering
 from .extraction import extract_pdf_content
 from .parsing import parse_transactions
 from .export import export_to_files
 from .utils import cleanup_temp_files
 
-# Enhanced logging configuration
-logging.basicConfig(
-    level=logging.DEBUG,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler('debug.log')
-    ]
-)
-logger = logging.getLogger(__name__)
-
 app = FastAPI(title="Bank Statement Converter", version="1.0.0")
 
-
-# Explicit allowlist (no "*")
+# CORS configuration - fixed
 ALLOWED_ORIGINS = [
     "http://localhost:3000",
     "https://frontend-production-358c.up.railway.app",
-    # "https://your-custom-domain.tld",  # add if/when you use one
 ]
+
+# Add your frontend domain if different
+frontend_url = os.environ.get("FRONTEND_URL")
+if frontend_url and frontend_url not in ALLOWED_ORIGINS:
+    ALLOWED_ORIGINS.append(frontend_url)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=ALLOWED_ORIGINS,  # ← single argument; no duplicates
+    allow_origins=ALLOWED_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -76,7 +78,7 @@ def add_debug_log(session_id: str, level: str, message: str, data: Any = None):
 
 @app.get("/")
 async def root():
-    return {"message": "Bank Statement Converter API", "debug_mode": True}
+    return {"message": "Bank Statement Converter API", "version": "1.0.0"}
 
 @app.get("/health")
 async def health_check():
@@ -109,42 +111,51 @@ async def health_check():
 @app.post("/convert")
 async def convert_bank_statement(
     file: UploadFile = File(...),
-    debug: bool = True  # Enable debug mode by default
+    debug: bool = False  # Disable debug mode by default in production
 ):
     """
-    Convert uploaded PDF bank statement to Excel and CSV format with debugging
+    Convert uploaded PDF bank statement to Excel and CSV format
     """
     session_id = str(uuid.uuid4())
     start_time = time.time()
     
-    # Initialize debug log
-    add_debug_log(session_id, "INFO", "Starting conversion process", {
-        "filename": file.filename,
-        "content_type": file.content_type,
-        "debug_mode": debug
-    })
+    # Initialize debug log only if debug mode is enabled
+    if debug:
+        add_debug_log(session_id, "INFO", "Starting conversion process", {
+            "filename": file.filename,
+            "content_type": file.content_type,
+            "debug_mode": debug
+        })
+    else:
+        logger.info(f"Starting conversion for session {session_id}, file: {file.filename}")
     
     if not file.filename.lower().endswith('.pdf'):
         error_msg = f"Invalid file type: {file.filename}"
-        add_debug_log(session_id, "ERROR", error_msg)
+        if debug:
+            add_debug_log(session_id, "ERROR", error_msg)
         raise HTTPException(status_code=400, detail=error_msg)
     
     temp_pdf_path = TEMP_DIR / f"{session_id}_input.pdf"
     
     try:
         # Save uploaded file
-        add_debug_log(session_id, "INFO", "Saving uploaded file")
+        if debug:
+            add_debug_log(session_id, "INFO", "Saving uploaded file")
+        
         file_content = await file.read()
         file_size = len(file_content)
         
         with open(temp_pdf_path, "wb") as buffer:
             buffer.write(file_content)
         
-        add_debug_log(session_id, "INFO", "File saved successfully", {
-            "size_bytes": file_size,
-            "size_mb": round(file_size / (1024*1024), 2),
-            "path": str(temp_pdf_path)
-        })
+        if debug:
+            add_debug_log(session_id, "INFO", "File saved successfully", {
+                "size_bytes": file_size,
+                "size_mb": round(file_size / (1024*1024), 2),
+                "path": str(temp_pdf_path)
+            })
+        else:
+            logger.info(f"File saved: {file_size} bytes")
         
         # Validate PDF
         with open(temp_pdf_path, 'rb') as f:
@@ -152,34 +163,24 @@ async def convert_bank_statement(
             if not header.startswith(b'%PDF-'):
                 raise ValueError("Invalid PDF header")
         
-        add_debug_log(session_id, "INFO", "PDF validation passed")
+        if debug:
+            add_debug_log(session_id, "INFO", "PDF validation passed")
         
-        # Extract content from PDF with detailed logging
-        add_debug_log(session_id, "INFO", "Starting PDF content extraction")
-        
-        try:
+        # Extract content from PDF
+        if debug:
+            add_debug_log(session_id, "INFO", "Starting PDF content extraction")
             raw_content, extraction_details = extract_pdf_content_with_debug(
                 str(temp_pdf_path), session_id
             )
-            
-            add_debug_log(session_id, "INFO", "Extraction completed", {
-                "content_length": len(raw_content),
-                "extraction_method": extraction_details.get('method'),
-                "pages_processed": extraction_details.get('pages_processed'),
-                "first_500_chars": raw_content[:500] if raw_content else "No content"
-            })
-            
-        except Exception as e:
-            add_debug_log(session_id, "ERROR", f"Extraction failed: {str(e)}", {
-                "traceback": traceback.format_exc()
-            })
-            raise
+        else:
+            raw_content = extract_pdf_content(str(temp_pdf_path))
+            extraction_details = {}
         
         if not raw_content or not raw_content.strip():
             error_msg = "No content extracted from PDF"
-            add_debug_log(session_id, "ERROR", error_msg)
+            if debug:
+                add_debug_log(session_id, "ERROR", error_msg)
             
-            # Return detailed error response with debug info
             return JSONResponse(
                 status_code=400,
                 content={
@@ -190,67 +191,41 @@ async def convert_bank_statement(
                 }
             )
         
-        # Parse transactions with detailed logging
-        add_debug_log(session_id, "INFO", "Starting transaction parsing")
-        
-        try:
+        # Parse transactions
+        if debug:
+            add_debug_log(session_id, "INFO", "Starting transaction parsing")
             transactions_df, parsing_details = parse_transactions_with_debug(
                 raw_content, session_id
             )
-            
-            add_debug_log(session_id, "INFO", "Parsing completed", {
-                "transactions_found": len(transactions_df),
-                "parsing_strategy": parsing_details.get('strategy_used'),
-                "columns": list(transactions_df.columns) if not transactions_df.empty else []
-            })
-            
-        except Exception as e:
-            add_debug_log(session_id, "ERROR", f"Parsing failed: {str(e)}", {
-                "traceback": traceback.format_exc()
-            })
-            raise
+        else:
+            transactions_df = parse_transactions(raw_content)
+            parsing_details = {}
         
         if transactions_df.empty:
             error_msg = "No transactions found in the PDF"
-            add_debug_log(session_id, "WARNING", error_msg)
+            if debug:
+                add_debug_log(session_id, "WARNING", error_msg)
             
-            # Return with raw content for debugging
             return JSONResponse(
                 status_code=400,
                 content={
                     "error": True,
                     "message": error_msg,
                     "debug_logs": debug_logs.get(session_id, []) if debug else None,
-                    "raw_content": raw_content[:5000] if debug else None  # First 5000 chars for debugging
+                    "raw_content": raw_content[:5000] if debug else None
                 }
             )
         
         # Export to Excel and CSV
-        add_debug_log(session_id, "INFO", "Starting export to Excel and CSV")
+        if debug:
+            add_debug_log(session_id, "INFO", "Starting export to Excel and CSV")
         
-        try:
-            excel_path, csv_path = export_to_files(transactions_df, session_id, TEMP_DIR)
-            
-            add_debug_log(session_id, "INFO", "Export completed", {
-                "excel_path": str(excel_path),
-                "csv_path": str(csv_path),
-                "excel_size": os.path.getsize(excel_path) if os.path.exists(excel_path) else 0,
-                "csv_size": os.path.getsize(csv_path) if os.path.exists(csv_path) else 0
-            })
-            
-        except Exception as e:
-            add_debug_log(session_id, "ERROR", f"Export failed: {str(e)}", {
-                "traceback": traceback.format_exc()
-            })
-            raise
+        excel_path, csv_path = export_to_files(transactions_df, session_id, TEMP_DIR)
         
         # Calculate processing time
         processing_time = time.time() - start_time
         
-        add_debug_log(session_id, "SUCCESS", "Conversion completed successfully", {
-            "total_time_seconds": round(processing_time, 2),
-            "transactions_count": len(transactions_df)
-        })
+        logger.info(f"Conversion completed for session {session_id}: {len(transactions_df)} transactions in {processing_time:.2f}s")
         
         # Prepare response
         response_data = {
@@ -276,9 +251,12 @@ async def convert_bank_statement(
         
     except Exception as e:
         error_msg = f"Error processing file: {str(e)}"
-        add_debug_log(session_id, "ERROR", error_msg, {
-            "traceback": traceback.format_exc()
-        })
+        logger.error(f"Error in session {session_id}: {error_msg}")
+        
+        if debug:
+            add_debug_log(session_id, "ERROR", error_msg, {
+                "traceback": traceback.format_exc()
+            })
         
         # Clean up on error
         cleanup_temp_files(session_id, TEMP_DIR)
@@ -470,6 +448,8 @@ async def cleanup_session(session_id: str):
 async def startup_event():
     """Run startup checks"""
     logger.info("Starting Bank Statement Converter API")
+    logger.info(f"Log level: {log_level}")
+    logger.info(f"Environment: {os.environ.get('RAILWAY_ENVIRONMENT', 'development')}")
     
     # Check dependencies
     try:
@@ -486,19 +466,22 @@ async def startup_event():
                 age = time.time() - old_file.stat().st_mtime
                 if age > 3600:  # 1 hour old
                     old_file.unlink()
-                    logger.info(f"Cleaned old file: {old_file}")
+                    logger.debug(f"Cleaned old file: {old_file}")
             except Exception as e:
                 logger.warning(f"Could not clean {old_file}: {str(e)}")
+    
+    logger.info("Startup complete")
 
 if __name__ == "__main__":
-    import os, uvicorn
+    import uvicorn
     port = int(os.environ.get("PORT", "8000"))
+    
+    # Use INFO level for production
     uvicorn.run(
         app,
-        host="0.0.0.0",   # ← switch to IPv4
+        host="0.0.0.0",
         port=port,
         proxy_headers=True,
-        log_level="debug",
-        access_log=True,
+        log_level="debug",  # Changed from debug/info
+        access_log=True,  # Disable access logs in production or True
     )
-

@@ -1,4 +1,4 @@
-# backend/app/extraction.py
+# backend/app/extraction.py - OPTIMIZED FOR PRODUCTION
 import pdfplumber
 from pdf2image import convert_from_path
 import pytesseract
@@ -44,16 +44,23 @@ def extract_text_from_pdf(pdf_path: str) -> str:
     
     try:
         with pdfplumber.open(pdf_path) as pdf:
+            total_pages = len(pdf.pages)
+            logger.info(f"Processing PDF with {total_pages} pages")
+            
             for page_num, page in enumerate(pdf.pages):
                 try:
                     text = page.extract_text()
                     if text:
                         text_content.append(text)
-                        logger.debug(f"Extracted text from page {page_num + 1}")
+                        # Only log progress at intervals
+                        if page_num % 10 == 0 or page_num == total_pages - 1:
+                            logger.debug(f"Processed {page_num + 1}/{total_pages} pages")
                 except Exception as e:
-                    logger.warning(f"Could not extract text from page {page_num + 1}: {str(e)}")
+                    if page_num == 0:  # Only log first failure
+                        logger.warning(f"Could not extract text from some pages: {str(e)}")
                     continue
         
+        logger.info(f"Text extraction complete: extracted from {len(text_content)}/{total_pages} pages")
         return '\n'.join(text_content)
         
     except Exception as e:
@@ -68,7 +75,10 @@ def extract_text_with_ocr(pdf_path: str) -> str:
     
     try:
         # Convert PDF to images
+        logger.info("Converting PDF to images for OCR...")
         images = convert_from_path(pdf_path, dpi=300)
+        total_pages = len(images)
+        logger.info(f"Starting OCR on {total_pages} pages")
         
         for page_num, image in enumerate(images):
             try:
@@ -83,12 +93,16 @@ def extract_text_with_ocr(pdf_path: str) -> str:
                 
                 if text.strip():
                     ocr_content.append(text)
-                    logger.debug(f"OCR extracted text from page {page_num + 1}")
+                    # Only log progress at intervals
+                    if page_num % 5 == 0 or page_num == total_pages - 1:
+                        logger.debug(f"OCR processed {page_num + 1}/{total_pages} pages")
                     
             except Exception as e:
-                logger.warning(f"OCR failed on page {page_num + 1}: {str(e)}")
+                if page_num == 0:  # Only log first failure
+                    logger.warning(f"OCR failed on some pages: {str(e)}")
                 continue
         
+        logger.info(f"OCR complete: extracted from {len(ocr_content)}/{total_pages} pages")
         return '\n'.join(ocr_content)
         
     except Exception as e:
