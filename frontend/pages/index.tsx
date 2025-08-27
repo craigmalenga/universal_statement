@@ -6,6 +6,9 @@ import ProgressBar from '../components/ProgressBar'
 import DownloadLink from '../components/DownloadLink'
 import DebugPanel from '../components/DebugPanel'
 
+// At the top of the component, inside Home()
+console.log('API URL:', process.env.NEXT_PUBLIC_API_URL || 'NOT SET')
+
 interface ConversionResult {
   session_id: string
   transactions_count: number
