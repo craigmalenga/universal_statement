@@ -62,7 +62,10 @@ export default function Home() {
       console.log('API Health:', data)
     } catch (error) {
       console.error('API Health Check Failed:', error)
-      setApiHealth({ status: 'error', message: error.message })
+
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error'
+      setApiHealth({ status: 'error', message: errorMessage })
+
     }
   }
 
