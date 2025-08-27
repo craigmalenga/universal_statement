@@ -43,7 +43,7 @@ app.add_middleware(
 
     allow_origins=[
         "http://localhost:3000", 
-        "https://your-frontend-name.railway.app"  # Add your Railway frontend URL
+        "https://frontend-production-358c.up.railway.app"  # Add your Railway frontend URL
     ],
 
     allow_credentials=True,
