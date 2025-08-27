@@ -1,4 +1,4 @@
-# backend/Dockerfile - ENHANCED VERSION WITH CAMELOT AND TABULA
+# backend/Dockerfile - FIXED FOR DEBIAN COMPATIBILITY
 FROM python:3.11-slim
 
 # Install system dependencies for PDF processing, OCR, and table extraction
@@ -7,29 +7,23 @@ RUN apt-get update && apt-get install -y \
     tesseract-ocr \
     tesseract-ocr-eng \
     poppler-utils \
-    # Java for Tabula
-    default-jre \
+    # Java for Tabula (if available)
+    default-jre || echo "Java not available, Tabula will not work" \
     # Ghostscript for Camelot
     ghostscript \
-    # OpenCV dependencies for Camelot
-    libgl1-mesa-glx \
+    # OpenCV/Graphics dependencies (using available packages)
+    libgl1 \
     libglib2.0-0 \
     libsm6 \
     libxext6 \
     libxrender1 \
     libgomp1 \
-    libgcc-s1 \
     libxcb1 \
-    # Python tk for Camelot (sometimes needed)
-    python3-tk \
     # Network tools
     curl \
     wget \
     # Clean up
     && rm -rf /var/lib/apt/lists/*
-
-# Verify Java installation (for debugging)
-RUN java -version
 
 # Set working directory
 WORKDIR /app
@@ -37,13 +31,27 @@ WORKDIR /app
 # Copy requirements first for better caching
 COPY requirements.txt .
 
-# Install Python dependencies with better error handling
+# Install Python dependencies
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt || \
-    (echo "Initial install failed, trying without optional dependencies" && \
-     pip install --no-cache-dir fastapi uvicorn[standard] python-multipart pdfplumber pdf2image pytesseract pandas openpyxl Pillow psutil && \
-     pip install --no-cache-dir tabula-py || echo "Tabula install failed" && \
-     pip install --no-cache-dir camelot-py[cv] || pip install --no-cache-dir camelot-py || echo "Camelot install failed")
+    (echo "Some packages failed, installing core dependencies only" && \
+     pip install --no-cache-dir \
+        fastapi==0.104.1 \
+        uvicorn[standard]==0.24.0 \
+        python-multipart==0.0.6 \
+        pdfplumber==0.10.3 \
+        pdf2image==1.16.3 \
+        pytesseract==0.3.10 \
+        pandas==2.1.4 \
+        openpyxl==3.1.2 \
+        Pillow==10.1.0 \
+        psutil==5.9.6)
+
+# Try to install optional table extraction libraries
+RUN pip install --no-cache-dir tabula-py==2.9.0 || echo "Tabula not installed" && \
+    pip install --no-cache-dir camelot-py[cv] || \
+    pip install --no-cache-dir camelot-py || \
+    echo "Camelot not installed"
 
 # Copy application code
 COPY . .
@@ -54,9 +62,6 @@ RUN mkdir -p temp_files
 # Set environment variables
 ENV PYTHONPATH=/app
 ENV PYTHONUNBUFFERED=1
-# Set Java home for Tabula
-ENV JAVA_HOME=/usr/lib/jvm/default-java
-ENV PATH="${JAVA_HOME}/bin:${PATH}"
 
 # Expose port (Railway will override this)
 EXPOSE 8000
