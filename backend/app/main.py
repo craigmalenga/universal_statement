@@ -31,21 +31,17 @@ logger = logging.getLogger(__name__)
 
 app = FastAPI(title="Bank Statement Converter", version="1.0.0")
 
-# Configure CORS for Railway deployment
-cors_origins = [
+
+# Explicit allowlist (no "*")
+ALLOWED_ORIGINS = [
     "http://localhost:3000",
-    "https://localhost:3000",
-    "*"  # Allow all origins during debugging
+    "https://frontend-production-358c.up.railway.app",
+    # "https://your-custom-domain.tld",  # add if/when you use one
 ]
 
 app.add_middleware(
     CORSMiddleware,
-
-    allow_origins=[
-        "http://localhost:3000", 
-        "https://frontend-production-358c.up.railway.app"  # Add your Railway frontend URL
-    ],
-
+    allow_origins=ALLOWED_ORIGINS,  # ← single argument; no duplicates
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
