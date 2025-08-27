@@ -397,6 +397,13 @@ def extract_pdf_content_with_debug(pdf_path: str, session_id: str) -> tuple[str,
             "first_1000_chars": ocr_content[:1000] if ocr_content else ""
         }
         
+        # FORCE STORE THE OCR TEXT REGARDLESS OF WHETHER IT'S "MEANINGFUL"
+        if ocr_content:  # As long as there's ANY text
+            extraction_details["all_extracted_text"] = ocr_content
+            extraction_details["raw_text_preview"] = ocr_content[:5000]  # Store more text for debugging
+            add_debug_log(session_id, "INFO", f"OCR extracted {len(ocr_content)} characters")
+
+
         if is_meaningful_text(ocr_content):
             add_debug_log(session_id, "DEBUG", "OCR extraction successful")
             extraction_details["method"] = "ocr"
@@ -420,6 +427,45 @@ def extract_pdf_content_with_debug(pdf_path: str, session_id: str) -> tuple[str,
         extraction_details["error"] = str(e)
         raise
 
+@app.post("/test-ocr")
+async def test_ocr_extraction(file: UploadFile = File(...)):
+    """Test what OCR is extracting"""
+    session_id = str(uuid.uuid4())
+    temp_pdf_path = TEMP_DIR / f"{session_id}_input.pdf"
+    
+    try:
+        # Save PDF
+        content = await file.read()
+        with open(temp_pdf_path, "wb") as f:
+            f.write(content)
+        
+        # Extract with OCR
+        from .extraction import extract_text_with_ocr
+        ocr_content = extract_text_with_ocr(str(temp_pdf_path))
+        
+        # Save to file for inspection
+        output_file = TEMP_DIR / f"{session_id}_ocr.txt"
+        with open(output_file, 'w', encoding='utf-8') as f:
+            f.write(ocr_content)
+        
+        # Look for date patterns
+        date_lines = []
+        for line in ocr_content.split('\n'):
+            if re.search(r'\d{2}/\d{2}/\d{4}', line):
+                date_lines.append(line)
+        
+        return {
+            "total_characters": len(ocr_content),
+            "total_lines": len(ocr_content.split('\n')),
+            "lines_with_dates": len(date_lines),
+            "first_2000_chars": ocr_content[:2000],
+            "sample_date_lines": date_lines[:10],
+            "download_url": f"/download-text/{session_id}"
+        }
+    
+    finally:
+        if temp_pdf_path.exists():
+            temp_pdf_path.unlink()
 
 def parse_transactions_with_debug(raw_content: str, session_id: str) -> tuple:
     """Enhanced parsing with debugging info - MUCH SIMPLER!"""
